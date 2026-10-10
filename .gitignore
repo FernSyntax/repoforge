@@ -1,0 +1,21 @@
+# Binaries
+/repoforge
+/bin/
+/dist/
+*.test
+*.exe
+
+# Coverage and profiles
+*.out
+coverage.*
+*.prof
+
+# Local environment and credentials (never commit)
+.env
+.env.*
+*.token
+
+# Generated template output (scripts/build-template default).
+# Publication is automated by the Template Publication workflow; a local
+# copy is a build artifact and is never committed.
+/.template-out/

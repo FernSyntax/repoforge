@@ -1,0 +1,75 @@
+# RepoForge policy for the RepoForge engine repository itself
+# (dogfooding): public open-source developer tool on the solo
+# governance profile. Schema: schemas/repoforge.schema.yaml (v1).
+standard:
+  name: "repoforge"
+  version: "v1"
+
+repository:
+  governance_profile: "solo"
+  visibility: "public"
+  default_branch: "main"
+
+merge:
+  squash: true
+  merge_commit: false
+  rebase: false
+  delete_branch: true
+  linear_history: true
+  auto_merge: false
+
+git:
+  commit_style: "conventional"
+  branch_style: "type-issue-description"
+
+github:
+  issues: true
+  discussions: true
+  projects: true
+  wiki: true
+
+security:
+  dependabot: true
+  code_scanning: true
+  secret_scanning: true
+  secret_scanning_push_protection: true
+  dependency_review: true
+  private_vulnerability_reporting: true
+  scorecard: true
+  action_pinning: "sha"
+
+release:
+  strategy: "github-release"
+
+project:
+  kind: "cli"
+
+ownership:
+  managed_paths:
+    - ".github/workflows/*.yml"
+    - "LICENSE"
+    - "CHANGELOG.md"
+  scaffolded_paths:
+    - "README.md"
+  user_owned_paths: []
+  # This repository is the template source: these files intentionally
+  # contain placeholders that tooling resolves in generated repos.
+  # The listed workflows additionally use GitHub ${{ }} expressions,
+  # and .goreleaser.yaml uses GoReleaser {{ }} templates, which share
+  # the double-brace syntax but are evaluated by those tools, not by
+  # RepoForge templating (exact paths: the managed_paths
+  # glob must stay the single owner of the directory pattern).
+  placeholder_paths:
+    - ".github/CODEOWNERS"
+    - ".github/ISSUE_TEMPLATE/config.yml"
+    # These two files genuinely need the exemption. GoReleaser and the
+    # ADR that documents the builder both use the same placeholder
+    # shape RepoForge does — a dot, an identifier, closing braces — and
+    # both are evaluated by something other than RepoForge templating.
+    # GitHub's ${{ }} expressions need no exemption: RepoForge
+    # placeholders carry a leading dot and GitHub's do not.
+    - ".goreleaser.yaml"
+    - "docs/decisions/0004-two-repositories-and-one-way-generation.md"
+    - "AGENTS.md"
+    - "CONTRIBUTING.md"
+    - "template/**"

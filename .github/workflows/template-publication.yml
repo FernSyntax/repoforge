@@ -1,0 +1,602 @@
+# Cross-repository template publication.
+#
+# This is the ONLY workflow in the repository that holds the template
+# publishing credential. It runs only when the Release workflow has
+# succeeded (`workflow_run`), or on manual dispatch against an existing,
+# validated release tag. It never runs on a branch and never on a pull
+# request, so untrusted code cannot reach the App private key.
+#
+# The App private key and the installation token are available to no
+# other workflow. Pull-request workflows never receive them.
+#
+# Same-tag, same-SHA dependency: the publish job verifies that the
+# triggering run targeted the release tag and that the engine release
+# for that tag exists and matches HEAD, so a publication can never be
+# made from an unvalidated branch or a stale run.
+#
+# The destination is fixed: FernSyntax/repoforge-template. Manual
+# dispatch cannot broaden it, because a publishing credential scoped to
+# one repository must never be pointed at another by an input.
+
+name: Template Publication
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing, validated release tag (e.g. v0.1.0). The release must already exist."
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    # The workflow_run trigger only counts on success.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    env:
+      # The single allowed destination. Not an input.
+      TARGET: FernSyntax/repoforge-template
+    outputs:
+      mode: ${{ steps.target.outputs.mode }}
+      source-commit: ${{ steps.target.outputs.source-commit }}
+      manifest-digest: ${{ steps.target.outputs.manifest-digest }}
+    steps:
+      - name: Checkout the tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # -----------------------------------------------------------------
+      # Resolve the immutable source: the release tag, its annotated tag
+      # object, and the commit it points at. Manual dispatch must name an
+      # existing release; a branch or an arbitrary ref is refused.
+      # -----------------------------------------------------------------
+      - name: Resolve the release tag and its commit
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          RUN_HEAD: ${{ github.event.workflow_run.head_branch }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            tag="$INPUT_TAG"
+          else
+            tag="$RUN_HEAD"
+          fi
+          case "$tag" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::source '$tag' is not a vMAJOR.MINOR.PATCH release tag" >&2; exit 1 ;;
+          esac
+
+          {
+            echo "tag=$tag"
+            echo "source-commit=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+          # The release must already exist: manual dispatch publishes an
+          # existing validated release, never a ref the pipeline has not
+          # vetted.
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            echo "::error::release $tag does not exist; publish a release before publishing its template" >&2
+            exit 1
+          fi
+          echo "engine release $tag exists"
+
+          # Same-SHA check: the tag must dereference to the commit that is
+          # checked out.
+          #
+          # Comparing the release's targetCommitish against
+          # `git rev-parse HEAD` cannot work, and silently never matches:
+          # for a release created from a tag, GitHub reports that field as
+          # the BRANCH the tag sits on ("main"), not as a SHA. The check
+          # then compares a branch name with a digest and fails on every
+          # run while looking like a legitimate guard.
+          #
+          # The tag object is the authoritative reference, and it is
+          # already in the checkout because the workflow was triggered
+          # by it.
+          if ! commit=$(git rev-parse --verify --quiet "$tag^{commit}"); then
+            # Fall back to the API when the tag is not in the local
+            # checkout, dereferencing an annotated tag object explicitly:
+            # the ref points at the tag object, which points at the commit.
+            ref_type=$(gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" --jq '.object.type' 2>/dev/null || echo "")
+            ref_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" --jq '.object.sha' 2>/dev/null || echo "")
+            case "$ref_type" in
+              tag) commit=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$ref_sha" --jq '.object.sha') ;;
+              commit) commit="$ref_sha" ;;
+              *)
+                echo "::error::cannot resolve tag $tag in $GITHUB_REPOSITORY (object type '$ref_type')" >&2
+                exit 1
+                ;;
+            esac
+          fi
+
+          if [ "$(git cat-file -t "$tag" 2>/dev/null)" != "tag" ]; then
+            echo "::error::tag $tag is not an annotated tag object; the release policy requires annotated tags" >&2
+            exit 1
+          fi
+
+          head_sha=$(git rev-parse HEAD)
+          echo "tag $tag -> commit $commit; checked-out $head_sha"
+          if [ "$commit" != "$head_sha" ]; then
+            echo "::error::release $tag targets $commit, but this run has $head_sha checked out; refusing to publish" >&2
+            exit 1
+          fi
+          echo "same-SHA: the release targets this exact commit"
+
+      # -----------------------------------------------------------------
+      # Stage 1 — trusted verification on the tagged source, before any
+      # credential exists.
+      # -----------------------------------------------------------------
+      - name: Validate the release tag
+        run: scripts/release-check.sh "${{ steps.source.outputs.tag }}"
+
+      # Schema parity is checked by `scripts/check-schema-parity`, which
+      # runs the comparison in Go. Installing PyYAML here was removed: a
+      # pip install is not hash-pinnable in a portable way, so it is
+      # reported by the Pinned-Dependencies OpenSSF Scorecard check as
+      # "pipCommand not pinned by hash", and the check now carries no
+      # dependency beyond the Go toolchain the release already needs.
+      - name: Validate the repository and the schemas
+        run: |
+          go run ./cmd/repoforge validate
+          scripts/check-schema-parity
+          scripts/check-issue-forms
+
+      # -----------------------------------------------------------------
+      # Stage 2 — build the template with complete immutable provenance
+      # and prove it is reproducible. This is where a manifest-digest
+      # output step must be identified by ID, or the value is empty.
+      # -----------------------------------------------------------------
+      - name: Build the template with immutable provenance
+        id: build
+        env:
+          TAG: ${{ steps.source.outputs.tag }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          scripts/build-template .template-out \
+            --repoforge-version "$TAG" \
+            --source-ref "$TAG" \
+            --source-commit "$HEAD_SHA" \
+            --source-url "https://github.com/$GITHUB_REPOSITORY"
+          digest=$(python3 -c '
+          import json, sys
+          print(json.load(open(".template-out/repoforge.manifest.json"))["manifest_digest"])
+          ')
+          {
+            echo "manifest-digest=$digest"
+          } >> "$GITHUB_OUTPUT"
+          echo "manifest digest: $digest"
+
+      # The provenance gate, run on the engine side before anything is
+      # published. `--require-source` fails closed on a manifest with no
+      # immutable source reference.
+      - name: Prove the built tree is traceable and deterministic
+        run: |
+          go run ./cmd/repoforge template verify --path .template-out --require-source
+          scripts/verify-template .template-out
+
+      # `include-hidden-files: true` is load-bearing, not tidiness:
+      # actions/upload-artifact v4 and later exclude paths whose name
+      # begins with a dot unless this is set, and the build output lives
+      # in `.template-out/`. Without it the step fails with
+      # "No files were found with the provided path: .template-out/."
+      # after a build that demonstrably wrote 42 files.
+      - name: Upload the verified build
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: template-build
+          path: .template-out/
+          retention-days: 1
+          if-no-files-found: error
+          include-hidden-files: true
+
+      # -----------------------------------------------------------------
+      # Stage 3 — resolve the destination and its state.
+      # -----------------------------------------------------------------
+      - name: Resolve the destination and its state
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "$TARGET" in
+            */*) ;;
+            *) echo "::error::destination must be owner/name, got '$TARGET'" >&2; exit 1 ;;
+          esac
+
+          # A hard failure here is a hard failure, not "pending".
+          if ! resolved=$(gh api "repos/$TARGET" --jq '.full_name' 2>&1); then
+            echo "::error::destination $TARGET is not readable with this token" >&2
+            echo "$resolved" >&2
+            exit 1
+          fi
+          if [ "$resolved" != "$TARGET" ]; then
+            echo "::error::destination resolved to $resolved, expected $TARGET; refusing to publish" >&2
+            exit 1
+          fi
+          echo "destination $TARGET resolves and is readable"
+
+          mode=auto
+          if ! branches=$(gh api "repos/$TARGET/branches" --jq 'length' 2>&1); then
+            echo "::error::cannot list branches of $TARGET" >&2
+            echo "$branches" >&2
+            exit 1
+          fi
+          if [ "$branches" = "0" ]; then
+            mode=initial
+          else
+            mode=routine
+          fi
+          echo "state: $branches branch(es); mode $mode"
+          {
+            echo "mode=$mode"
+            echo "owner=${TARGET%%/*}"
+            echo "repo=${TARGET##*/}"
+          } >> "$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------
+      # Stage 4 — preflight the credential. A secret-LISTING check cannot
+      # validate a private key, and an underprivileged GITHUB_TOKEN cannot
+      # even list secrets. The only real test is minting a token and using
+      # it, so that is what this does.
+      # -----------------------------------------------------------------
+      - name: Mint an installation token scoped to the target repository
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.REPOFORGE_APP_ID }}
+          private-key: ${{ secrets.REPOFORGE_APP_PRIVATE_KEY }}
+          owner: ${{ steps.target.outputs.owner }}
+          repositories: ${{ steps.target.outputs.repo }}
+          permission-contents: write
+          permission-workflows: write
+          permission-pull-requests: write
+          permission-checks: read
+          permission-metadata: read
+
+      - name: Confirm the installation scope
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          resolved=$(gh api "repos/$TARGET" --jq '.full_name' 2>&1) || {
+            echo "::error::the installation token cannot read $TARGET" >&2
+            echo "$resolved" >&2
+            exit 1
+          }
+          if [ "$resolved" != "$TARGET" ]; then
+            echo "::error::the installation token resolves '$resolved', expected '$TARGET'; the App is installed on the wrong repositories" >&2
+            exit 1
+          fi
+          echo "the installation token resolves exactly $TARGET"
+
+      # -----------------------------------------------------------------
+      # Stage 5 — initial publication into an empty repository.
+      # -----------------------------------------------------------------
+      - name: Download the verified build
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: template-build
+          path: .template-out
+
+      - name: Re-verify the downloaded build
+        run: go run ./cmd/repoforge template verify --path .template-out --require-source
+
+      - name: Refuse a target that is not empty
+        if: steps.target.outputs.mode == 'initial'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -euo pipefail
+          # Every way a repository can carry state: commits, branches,
+          # tags, releases. Any of them means the initial path would
+          # overwrite something, so it stops.
+          #
+          # An EMPTY repository is not a zero-length commit list — the
+          # commits endpoint answers 409 "Git Repository is empty.", and
+          # gh prints that error body to stdout while exiting non-zero.
+          # `$(gh api ... || echo 0)` therefore captures the JSON *and*
+          # the fallback concatenated, which then reads as a non-empty
+          # count. The empty case must be detected and counted as zero,
+          # and every other failure must fail closed.
+          count() {
+            local endpoint="$1" out rc
+            if out=$(gh api "repos/$TARGET/$endpoint" 2>&1); then
+              printf '%s' "$out" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))'
+              return 0
+            fi
+            rc=$?
+            case "$out" in
+              *"Git Repository is empty"*)
+                # This is the state the initial path requires.
+                echo 0
+                return 0
+                ;;
+            esac
+            echo "::error::cannot inspect $TARGET ($endpoint), exit $rc: $out" >&2
+            return 1
+          }
+          commits=$(count "commits?per_page=1") || exit 1
+          branches=$(count "branches") || exit 1
+          tags=$(count "tags") || exit 1
+          releases=$(count "releases") || exit 1
+          echo "state: commits=$commits branches=$branches tags=$tags releases=$releases"
+          if [ "$commits" != "0" ] || [ "$branches" != "0" ] || [ "$tags" != "0" ] || [ "$releases" != "0" ]; then
+            echo "::error::$TARGET is not empty (commits=$commits branches=$branches tags=$tags releases=$releases)." >&2
+            echo "publish: the initial path refuses to overwrite existing state; use the routine path." >&2
+            exit 1
+          fi
+          echo "$TARGET is empty; the initial path may proceed"
+
+      # The token travels through the environment as HTTP Basic with the
+      # documented x-access-token username. `Authorization: bearer` is
+      # rejected by git-over-HTTPS with "invalid credentials", and a URL
+      # would persist the credential in the clone's configuration.
+      - name: Publish the initial root commit
+        if: steps.target.outputs.mode == 'initial'
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          TAG: ${{ steps.source.outputs.tag }}
+          HEAD_SHA: ${{ github.sha }}
+        # shellcheck disable=SC2155 # RUNNER_TEMP is always set by GitHub Actions
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/initial"
+          rm -rf "$work"
+          mkdir -p "$work"
+          git init --quiet --initial-branch=main "$work"
+          cp -a "$GITHUB_WORKSPACE/.template-out/." "$work/"
+          cd "$work"
+          git config user.name "repoforge-publisher"
+          git config user.email "repoforge-publisher@users.noreply.github.com"
+          git add -A
+          git commit --quiet -m "chore(release): initialize the RepoForge template from $TAG ($HEAD_SHA)"
+          root=""
+          root=$(git rev-parse HEAD)
+          # The target is empty, so pushing main is a ref creation, not a
+          # force-push: there is no history to overwrite.
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          auth=$(printf 'x-access-token:%s' "$APP_TOKEN" | base64 -w0)
+          export GIT_CONFIG_VALUE_0="Authorization: Basic $auth"
+          git remote add origin "https://github.com/$TARGET.git"
+          git push --quiet origin "main"
+          echo "ROOT_COMMIT=$root" >> "$GITHUB_ENV"
+          echo "initial root commit $root — exactly one commit, no follow-up commit"
+
+      - name: Wait for the template's hosted CI
+        if: steps.target.outputs.mode == 'initial'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "waiting for the required checks on the initial commit"
+          # A permissions error is surfaced immediately. Only a genuinely
+          # running check may be waited on: reporting "pending" when the
+          # token cannot read checks would hang and then fail.
+          for i in $(seq 1 60); do
+            payload=$(gh api "repos/$TARGET/commits/main/check-runs" 2>&1) || {
+              echo "::error::cannot read check runs for $TARGET: $payload" >&2
+              echo "publish: the App needs Checks: read to wait for the template's CI" >&2
+              exit 1
+            }
+            state=$(printf '%s' "$payload" | python3 -c '
+          import json, sys
+          try:
+              runs = json.load(sys.stdin)["check_runs"]
+          except Exception:
+              print("unreadable"); sys.exit(0)
+          if not runs:
+              print("empty"); sys.exit(0)
+          if any(r["conclusion"] in ("failure", "cancelled", "timed_out", "action_required") for r in runs):
+              print("failing"); sys.exit(0)
+          if all(r["status"] == "completed" for r in runs):
+              print("passing"); sys.exit(0)
+          print("pending")
+          ')
+            echo "check state: $state (attempt $i)"
+            case "$state" in
+              passing) echo "the template's hosted CI is green"; exit 0 ;;
+              failing)
+                echo "::error::the template's hosted CI failed on the initial commit." >&2
+                echo "publish: do not create a hidden second commit. Correct the local candidate" >&2
+                echo "publish: and re-establish a clean initial state." >&2
+                exit 1 ;;
+            esac
+            # "empty" and "pending" both mean the checks have not
+            # reported yet — a workflow that has just been triggered
+            # registers no check runs at all on the first poll. Treating
+            # that as an error aborted the publication seconds after the
+            # root commit landed, before the template's CI had a chance
+            # to start.
+            sleep 20
+          done
+          echo "::error::timed out waiting for the template's hosted CI" >&2
+          exit 1
+
+      # An annotated tag object, then its ref. A ref created directly over
+      # a commit is a lightweight tag, which the release policy (R3)
+      # forbids and which `release-check.sh` rejects on the next release.
+      - name: Publish the initial annotated tag and release
+        if: steps.target.outputs.mode == 'initial'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TAG: v0.1.0
+          SOURCE_TAG: ${{ steps.source.outputs.tag }}
+          SOURCE_SHA: ${{ steps.source.outputs.tag }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          root=""
+          root=$(gh api "repos/$TARGET/commits/main" --jq '.sha')
+          if [ "$root" != "$ROOT_COMMIT" ]; then
+            echo "::error::the template's main moved: $root != $ROOT_COMMIT" >&2
+            exit 1
+          fi
+
+          # Annotated tag object first, then the ref that points at it.
+          tag_sha=$(gh api --method POST "repos/$TARGET/git/tags" \
+            -f tag="$TAG" \
+            -f message="$TAG" \
+            -f object="$root" \
+            -f type=commit \
+            --jq '.sha')
+          echo "created annotated tag object $tag_sha"
+          gh api --method POST "repos/$TARGET/git/refs" \
+            -f ref="refs/tags/$TAG" \
+            -f sha="$tag_sha" >/dev/null
+          echo "created ref refs/tags/$TAG -> $tag_sha"
+
+          # Verify the tag is an annotated tag object and that it
+          # dereferences to the intended root commit.
+          #
+          # The dereference goes straight to /git/tags/<sha>, which is the
+          # one endpoint that resolves the tag object to its commit. An
+          # earlier attempt tried /repos/$TARGET/repos/$TARGET/git/tags/...
+          # — a duplicated path prefix that 404s — and the `||` fallback
+          # inherited the 404, so the verification printed a JSON error
+          # body in place of the SHA and compared that against the root
+          # commit. The tag object had been created correctly; only the
+          # check was wrong.
+          deref=""
+          deref=$(gh api "repos/$TARGET/git/refs/tags/$TAG" --jq '.object.sha')
+          tag_object_type=""
+          tag_object_type=$(gh api "repos/$TARGET/git/refs/tags/$TAG" --jq '.object.type')
+          target=""
+          target=$(gh api "repos/$TARGET/git/tags/$deref" --jq '.object.sha')
+          echo "tag $TAG ($tag_object_type) dereferences to $target"
+          if [ "$tag_object_type" != "tag" ]; then
+            echo "::error::$TAG is not an annotated tag object" >&2
+            exit 1
+          fi
+          if [ -z "$target" ]; then
+            echo "::error::cannot dereference tag $TAG ($deref); the tag object could not be read" >&2
+            exit 1
+          fi
+          if [ "$target" != "$root" ]; then
+            echo "::error::$TAG dereferences to $target, expected $root" >&2
+            exit 1
+          fi
+          echo "tag $TAG is annotated and targets the root commit"
+
+          # printf -v, not incremental $notes="$notes$(printf '\n\n')" —
+          # command substitution strips trailing newlines, so that form
+          # produces a body with no separators at all: every paragraph
+          # runs together on one line.
+          printf -v notes 'Generated from FernSyntax/repoforge %s (%s).\n\nManifest digest: %s\n\nThis repository is the canonical generated starter repository. It is built from the RepoForge engine'"'"'s tagged source and verified byte-for-byte against that source by its own CI.\n\nUse it as a GitHub template:\n\n    gh repo create <owner>/<name> --template FernSyntax/repoforge-template --public --clone\n' \
+            "$SOURCE_TAG" "$HEAD_SHA" "${{ steps.build.outputs.manifest-digest }}"
+          printf '%s\n' "$notes" > "$RUNNER_TEMP/template-notes.md"
+          gh release create "$TAG" \
+            --repo "$TARGET" \
+            --title "RepoForge template $TAG" \
+            --notes-file "$RUNNER_TEMP/template-notes.md" >/dev/null
+          echo "published template release $TAG"
+
+      - name: Verify the initial publication state
+        if: steps.target.outputs.mode == 'initial'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -euo pipefail
+          commits=$(gh api "repos/$TARGET/commits?per_page=100" --jq 'length' 2>/dev/null || echo "?")
+          tags=$(gh api "repos/$TARGET/tags" --jq 'length' 2>/dev/null || echo "?")
+          releases=$(gh api "repos/$TARGET/releases" --jq 'length' 2>/dev/null || echo "?")
+          main=$(gh api "repos/$TARGET/commits/main" --jq '.sha' 2>/dev/null || echo "missing")
+          echo "state: commits=$commits tags=$tags releases=$releases main=$main"
+          if [ "$commits" != "1" ]; then
+            echo "::error::expected exactly 1 commit on main, found $commits" >&2
+            exit 1
+          fi
+          if [ "$tags" != "1" ]; then
+            echo "::error::expected exactly 1 tag, found $tags" >&2
+            exit 1
+          fi
+          if [ "$releases" != "1" ]; then
+            echo "::error::expected exactly 1 release, found $releases" >&2
+            exit 1
+          fi
+          if [ "$main" != "$ROOT_COMMIT" ]; then
+            echo "::error::main is $main, expected the root commit $ROOT_COMMIT" >&2
+            exit 1
+          fi
+          echo "initial publication verified: one commit, one annotated tag, one release"
+
+      # -----------------------------------------------------------------
+      # Stage 6 — routine publication: a generated pull request, never a
+      # write to an existing main.
+      # -----------------------------------------------------------------
+      - name: Open or update the generated update pull request
+        if: steps.target.outputs.mode == 'routine'
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          TAG: ${{ steps.source.outputs.tag }}
+          HEAD_SHA: ${{ github.sha }}
+          DIGEST: ${{ steps.build.outputs.manifest-digest }}
+        # shellcheck disable=SC2155 # RUNNER_TEMP is always set by GitHub Actions
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/target"
+          rm -rf "$work"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          auth=$(printf 'x-access-token:%s' "$APP_TOKEN" | base64 -w0)
+          export GIT_CONFIG_VALUE_0="Authorization: Basic $auth"
+          git clone --quiet "https://github.com/$TARGET.git" "$work"
+          cd "$work"
+          git config user.name "repoforge-publisher"
+          git config user.email "repoforge-publisher@users.noreply.github.com"
+
+          branch="repoforge-sync/${TAG}"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            git fetch --quiet origin "$branch"
+            git checkout --quiet -B "$branch" "origin/$branch"
+          else
+            git checkout --quiet -b "$branch" origin/main
+          fi
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -a "$GITHUB_WORKSPACE/.template-out/." .
+          git add -A
+          if git diff --cached --quiet; then
+            echo "the target is already synchronized with $TAG; nothing to do"
+            exit 0
+          fi
+          git commit --quiet -m "chore(template): sync to RepoForge $TAG ($HEAD_SHA)"
+          git push --quiet origin "HEAD:$branch"
+
+          printf -v body 'Generated from FernSyntax/repoforge %s (%s).\n\nManifest digest: %s\n\nThis pull request was produced by the RepoForge template publication workflow. Do not merge it until the required checks pass.\n\n<!-- dependency-pull-request -->\n' \
+            "$TAG" "$HEAD_SHA" "$DIGEST"
+          printf '%s\n' "$body" > "$RUNNER_TEMP/pr-body.md"
+
+          pr=$(gh pr list --repo "$TARGET" --head "$branch" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$pr" ]; then
+            gh pr edit "$pr" --repo "$TARGET" --body-file "$RUNNER_TEMP/pr-body.md" >/dev/null
+            echo "updated pull request #$pr"
+          else
+            gh pr create --repo "$TARGET" --base main --head "$branch" \
+              --title "chore(template): sync to RepoForge $TAG" \
+              --body-file "$RUNNER_TEMP/pr-body.md" >/dev/null
+            echo "opened a generated pull request from $branch"
+          fi
+          echo "main was not written directly; the change goes through review"

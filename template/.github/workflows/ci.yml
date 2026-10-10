@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Local, offline gates that work in any language.
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify
+        run: sh scripts/verify
+
+      - name: Check formatting and whitespace
+        run: git diff --check
+
+  # The CLI is built from the EXACT engine source that generated this
+  # tree, read out of this repository's own manifest. See
+  # .github/actions/cli for why the module proxy cannot be used: it caches
+  # by tag string, so a tag reused across repository recreations serves a
+  # stale build that disagrees with the manifest it is reading.
+  source:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      url: ${{ steps.manifest.outputs.url }}
+      commit: ${{ steps.manifest.outputs.commit }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read the recorded engine source
+        id: manifest
+        run: |
+          {
+            echo "url=$(python3 -c 'import json;print(json.load(open("repoforge.manifest.json"))["source_url"])')"
+            echo "commit=$(python3 -c 'import json;print(json.load(open("repoforge.manifest.json"))["source_commit"])')"
+          } >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+  # The two jobs below are gates on the CANONICAL template repository
+  # only. They check that what is published really is a faithful,
+  # un-adopted build of the engine source that produced it. A project
+  # that adopted this template legitimately has application source, a
+  # go.mod, and resolved placeholders — running these gates there would
+  # fail it for exactly the work it exists to do.
+  #
+  # The guard is the repository identity, which `template adopted`
+  # additionally encodes in the manifest: an adopting project's
+  # `repoforge template adopt` marks the manifest adopted and the gate
+  # is released.
+  repoforge:
+    if: github.repository == 'FernSyntax/repoforge-template'
+    needs: source
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+
+      - name: Build the CLI from the recorded source
+        uses: ./.github/actions/cli
+        with:
+          url: ${{ needs.source.outputs.url }}
+          commit: ${{ needs.source.outputs.commit }}
+
+      # $GITHUB_PATH takes effect for SUBSEQUENT steps, not the one that
+      # writes it. Appending inside the same step as the command leaves
+      # the command unable to find the binary. It is also preferred over
+      # a step-level `env: PATH:` assignment, because `${{ env.PATH }}`
+      # resolves to empty in that position and replaces PATH entirely.
+      - name: Put the CLI on PATH
+        run: echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Validate template model
+        run: repoforge template validate --path .
+
+  # Provenance gate: this repository is generated. The manifest records
+  # the engine source commit it was built from, and this job rebuilds
+  # from that commit and compares byte-for-byte. A hand-edited tree
+  # cannot make the recorded source produce the edited bytes, so a
+  # divergent repository fails here.
+  provenance:
+    if: github.repository == 'FernSyntax/repoforge-template'
+    needs: source
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+
+      - name: Build the CLI from the recorded source
+        uses: ./.github/actions/cli
+        with:
+          url: ${{ needs.source.outputs.url }}
+          commit: ${{ needs.source.outputs.commit }}
+
+      - name: Put the CLI on PATH
+        run: echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      # --require-source fails closed: a tree whose manifest records no
+      # immutable source commit cannot be traced and must not be green.
+      - name: Verify this tree against its recorded source
+        run: repoforge template verify --path . --require-source

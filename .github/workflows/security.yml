@@ -1,0 +1,47 @@
+# Security analysis: govulncheck over the module dependency graph.
+#
+# CodeQL itself runs via code scanning default setup (enabled by
+# bootstrap per the security.code_scanning policy on capable
+# repositories) — not via an advanced-setup workflow: GitHub rejects
+# advanced-configuration SARIF uploads while default setup is on,
+# and the two must never coexist. This workflow is fully read-only.
+#
+# Runs on push to main, on pull requests, and weekly — the schedule
+# covers the default branch between changes.
+
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 4 * * 1"
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # Pinned module version: the Go module proxy serves immutable,
+      # hash-verified module zips, so the tool version is fixed without
+      # a third-party action.
+      - name: Scan dependencies
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...

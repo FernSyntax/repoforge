@@ -1,0 +1,360 @@
+# RepoForge Repository Contract — canonical schema, version v1.
+#
+# This file is the canonical form. schemas/repoforge.schema.json is a
+# derived translation; both must remain semantically identical. Equivalence
+# is verified in CI (planned) and manually until then.
+#
+# Full field reference: docs/architecture/configuration-model.md
+# Contract overview:      docs/architecture/repository-contract.md
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "urn:repoforge:schema:repoforge:v1"
+$comment: "Schema version: v1. Policy documents declare it via standard.version. Canonical form: repoforge.schema.yaml; repoforge.schema.json is derived from it."
+title: "RepoForge Repository Contract"
+description: >-
+  Declarative policy describing the desired state of a RepoForge-managed
+  GitHub repository. Validated deterministically (spec.md §9.3). Unknown fields
+  are rejected: every object sets additionalProperties to false. Defaults are
+  annotations consumed by RepoForge tooling; an omitted field behaves
+  exactly as if set to its documented default (spec.md §9.4).
+type: object
+additionalProperties: false
+required:
+  - standard
+properties:
+  standard:
+    type: object
+    additionalProperties: false
+    required:
+      - version
+    description: >-
+      Identifies the standard and the schema version the policy conforms to.
+    properties:
+      name:
+        type: string
+        pattern: "^[a-z0-9][a-z0-9-]*$"
+        default: "repoforge"
+        description: >-
+          Name of the engineering standard this policy conforms to. Forks of
+          the standard set their own name.
+      version:
+        type: string
+        const: "v1"
+        description: >-
+          Repository contract schema version. Tooling must reject policies
+          declaring an unknown version (spec.md §9.2).
+  repository:
+    type: object
+    additionalProperties: false
+    description: >-
+      Core repository identity and governance settings.
+    properties:
+      governance_profile:
+        type: string
+        enum: ["solo", "team", "strict"]
+        default: "solo"
+        description: >-
+          Named governance profile, realized by the GitHub governance model:
+          configs/github/<profile>.yaml layered onto
+          configs/github/repository.yaml (docs/architecture/github-governance.md).
+      visibility:
+        type: string
+        enum: ["public", "private", "internal"]
+        default: "public"
+        description: >-
+          Desired repository visibility. Changing visibility is a
+          security-sensitive operation (spec.md §8.5): doctor audits it,
+          bootstrap never changes it silently.
+      default_branch:
+        type: string
+        pattern: "^[a-zA-Z0-9][a-zA-Z0-9._/-]*$"
+        default: "main"
+        description: >-
+          The default branch. The standard's own Git model requires "main"
+          (spec.md §6.1); other values are possible for managed repositories but
+          deviate from the standard.
+  merge:
+    type: object
+    additionalProperties: false
+    description: >-
+      Merge methods and post-merge behavior. At least one merge method must
+      be enabled. GitHub setting names given in descriptions must be verified
+      against the current GitHub API before implementation (spec.md §7.2).
+    anyOf:
+      - properties:
+          squash:
+            const: true
+      - properties:
+          merge_commit:
+            const: true
+      - properties:
+          rebase:
+            const: true
+    properties:
+      squash:
+        type: boolean
+        default: true
+        description: >-
+          Allow squash merging (GitHub: allow_squash_merge). The standard's
+          preferred method (pull-requests.md, M1).
+      merge_commit:
+        type: boolean
+        default: false
+        description: >-
+          Allow merge commits (GitHub: allow_merge_commit). Disabled by
+          default (pull-requests.md, M2).
+      rebase:
+        type: boolean
+        default: false
+        description: >-
+          Allow rebase merging (GitHub: allow_rebase_merge). Disabled by
+          default (pull-requests.md, M3).
+      delete_branch:
+        type: boolean
+        default: true
+        description: >-
+          Delete head branches after merge (GitHub: delete_branch_on_merge;
+          pull-requests.md, M4).
+      linear_history:
+        type: boolean
+        default: false
+        description: >-
+          Require linear history on the default branch (GitHub branch
+          protection: required_linear_history). Requires branch protection;
+          incompatible with merge_commit enabled.
+      auto_merge:
+        type: boolean
+        default: false
+        description: >-
+          Allow auto-merge on pull requests (GitHub: allow_auto_merge).
+          Only effective with required status checks.
+  git:
+    type: object
+    additionalProperties: false
+    description: >-
+      Git authorship conventions. Enforcement is via CI lint (planned) and
+      review until then.
+    properties:
+      commit_style:
+        type: string
+        enum: ["conventional"]
+        default: "conventional"
+        description: >-
+          Commit message convention. v1 supports only the restricted
+          Conventional Commits subset in
+          docs/development/commit-conventions.md. New styles are additive
+          schema changes.
+      branch_style:
+        type: string
+        enum: ["type-issue-description"]
+        default: "type-issue-description"
+        description: >-
+          Branch naming convention. v1 supports only
+          <type>/<issue>-<description> per docs/development/branching.md.
+  github:
+    type: object
+    additionalProperties: false
+    description: >-
+      GitHub feature toggles (repository settings).
+    properties:
+      issues:
+        type: boolean
+        default: true
+        description: "Enable Issues (GitHub: has_issues)."
+      discussions:
+        type: boolean
+        default: false
+        description: "Enable Discussions (GitHub: has_discussions)."
+      projects:
+        type: boolean
+        default: false
+        description: >-
+          Enable repository Projects (GitHub: has_projects). Organization
+          Projects are not modeled in v1.
+      wiki:
+        type: boolean
+        default: false
+        description: "Enable the wiki (GitHub: has_wiki)."
+  security:
+    type: object
+    additionalProperties: false
+    description: >-
+      Security feature configuration. All operations in this section are
+      security-sensitive (spec.md §8.5): individually planned and confirmed by
+      bootstrap, audited by doctor.
+    properties:
+      dependabot:
+        type: boolean
+        default: true
+        description: >-
+          Dependabot vulnerability alerts and security updates. Version
+          updates additionally require a dependabot.yml, modeled under
+          ownership.managed_paths.
+      code_scanning:
+        type: boolean
+        default: false
+        description: >-
+          Code scanning (CodeQL default setup). Free for public repositories;
+          private repositories require a GitHub Advanced Security license.
+      secret_scanning:
+        type: boolean
+        default: true
+        description: >-
+          Secret scanning. Free for public repositories; private repositories
+          require GitHub Advanced Security.
+      secret_scanning_push_protection:
+        type: boolean
+        default: true
+        description: >-
+          Secret scanning push protection. Requires secret_scanning enabled.
+      dependency_review:
+        type: boolean
+        default: true
+        description: >-
+          Dependency review on pull requests via CI. Requires the dependency
+          graph (enabled by default for public repositories).
+      private_vulnerability_reporting:
+        type: boolean
+        default: true
+        description: >-
+          Private vulnerability reporting (Security tab → Report a
+          vulnerability). Documented for public repositories; on other
+          repositories availability is determined by GitHub at apply
+          time and failures surface explicitly, never silently.
+      scorecard:
+        type: boolean
+        default: true
+        description: >-
+          OpenSSF Scorecard analysis workflow. Primarily meaningful for
+          public repositories; requires a workflow file under
+          ownership.managed_paths.
+      action_pinning:
+        type: string
+        enum: ["sha", "tag", "none"]
+        default: "sha"
+        description: >-
+          Required pinning for GitHub Actions. "sha" requires full-length
+          commit SHAs (spec.md §8.6). Enforced by CI lint (planned).
+  release:
+    type: object
+    additionalProperties: false
+    description: >-
+      Release behavior (spec.md §14, docs/development/release-process.md).
+    properties:
+      strategy:
+        type: string
+        enum: ["none", "tag", "github-release"]
+        default: "github-release"
+        description: >-
+          "none": no releases. "tag": annotated SemVer tags only.
+          "github-release": annotated tags plus a GitHub release per tag.
+  project:
+    type: object
+    additionalProperties: false
+    description: >-
+      Classification of the repository's purpose.
+    properties:
+      kind:
+        type: string
+        enum: ["application", "cli", "library", "service", "template", "docs", "meta"]
+        default: "application"
+        description: >-
+          Informational in v1; may drive template and doctor behavior in
+          later schema versions. Enum growth is additive.
+  ownership:
+    type: object
+    additionalProperties: false
+    description: >-
+      Path ownership model (spec.md §5). Entries are gitignore-style glob
+      patterns relative to the repository root. On overlap, precedence is:
+      user_owned_paths, then managed_paths, then scaffolded_paths.
+    properties:
+      managed_paths:
+        type: array
+        items:
+          type: string
+          minLength: 1
+          pattern: "^[^/]"
+        uniqueItems: true
+        default: []
+        description: >-
+          Paths owned by the policy: bootstrap creates and updates them,
+          validate checks them, manual edits are drift (spec.md §5.2).
+      scaffolded_paths:
+        type: array
+        items:
+          type: string
+          minLength: 1
+          pattern: "^[^/]"
+        uniqueItems: true
+        default: []
+        description: >-
+          Paths generated once (template or first bootstrap) and then owned
+          by the user; tooling never updates them after creation.
+      user_owned_paths:
+        type: array
+        items:
+          type: string
+          minLength: 1
+          pattern: "^[^/]"
+        uniqueItems: true
+        default: []
+        description: >-
+          Paths tooling must never create, modify, or delete (spec.md §5.3).
+      placeholder_paths:
+        type: array
+        items:
+          type: string
+          minLength: 1
+          pattern: "^[^/]"
+        uniqueItems: true
+        default: []
+        description: >-
+          Paths permitted to contain unresolved template placeholders
+          (the double-brace syntax used by the template builder). Intended
+          for template sources, such as the engine repository itself. In
+          generated repositories this list is normally empty: placeholders
+          there are unresolved-template bugs flagged by validate.
+examples:
+  - standard:
+      name: "repoforge"
+      version: "v1"
+    repository:
+      governance_profile: "standard"
+      visibility: "public"
+      default_branch: "main"
+    merge:
+      squash: true
+      merge_commit: false
+      rebase: false
+      delete_branch: true
+      linear_history: false
+      auto_merge: false
+    git:
+      commit_style: "conventional"
+      branch_style: "type-issue-description"
+    github:
+      issues: true
+      discussions: false
+      projects: false
+      wiki: false
+    security:
+      dependabot: true
+      code_scanning: false
+      secret_scanning: true
+      secret_scanning_push_protection: true
+      dependency_review: true
+      private_vulnerability_reporting: true
+      scorecard: true
+      action_pinning: "sha"
+    release:
+      strategy: "github-release"
+    project:
+      kind: "cli"
+    ownership:
+      managed_paths:
+        - ".github/workflows/*.yml"
+        - "LICENSE"
+      scaffolded_paths:
+        - "README.md"
+      user_owned_paths:
+        - "docs/**"

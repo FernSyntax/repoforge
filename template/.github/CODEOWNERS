@@ -1,0 +1,11 @@
+# Ownership for this repository.
+#
+# {{ .Owner }} is resolved by RepoForge tooling when the repository
+# is adopted. Do not replace it by hand.
+
+* {{ .Owner }}
+
+/.github/workflows/ {{ .Owner }}
+/.github/CODEOWNERS {{ .Owner }}
+/SECURITY.md {{ .Owner }}
+/scripts/ {{ .Owner }}

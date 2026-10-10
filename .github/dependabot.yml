@@ -1,0 +1,53 @@
+version: 2
+
+# Dependabot is configured to be quiet on purpose.
+#
+# An earlier configuration used one entry per directory with weekly
+# cadence and a PR limit of five, which produced three separate pull
+# requests per week. Each of those triggered the full CI matrix, so a
+# routine dependency bump cost dozens of Actions minutes and put
+# unreviewed major-version jumps in front of the release pipeline.
+#
+# The shape below is: one grouped PR per ecosystem per month, and no
+# more than one open PR per ecosystem.
+
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    # Every GitHub Actions bump lands in one PR, so a weekly "three
+    # actions need updating" notification becomes one reviewable change
+    # instead of three.
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # The generated template's workflow pins are canonical engine content
+  # (ADR-0004: the engine is the only routine writer of template
+  # content). Dependabot opening a pull request against the template
+  # repository itself would diverge it from the engine source, and the
+  # template's own provenance gate would then (correctly) reject it. The
+  # pinned action bumps for template/ therefore land here and travel
+  # through the publication pipeline instead.
+  - package-ecosystem: "github-actions"
+    directory: "/template/.github/workflows"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    groups:
+      template-github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    groups:
+      go-modules:
+        patterns:
+          - "*"

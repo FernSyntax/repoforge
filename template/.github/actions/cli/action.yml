@@ -1,0 +1,45 @@
+name: "Build the RepoForge CLI from this repository's recorded source"
+description: >-
+  Builds the repoforge binary from the exact engine commit named in this
+  repository's repoforge.manifest.json, so the CLI that validates this
+  tree is by construction the version that produced it.
+
+  Installing `pkg@vX.Y.Z` instead would resolve through the Go module
+  proxy, which caches by tag string: a tag reused across repository
+  recreations is served from whatever was cached first, and the
+  validating CLI can then be an older build than the tree it validates.
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve the engine source from the manifest
+      shell: bash
+      run: |
+        {
+          echo "url=$(python3 -c 'import json;print(json.load(open("repoforge.manifest.json"))["source_url"])')"
+          echo "commit=$(python3 -c 'import json;print(json.load(open("repoforge.manifest.json"))["source_commit"])')"
+        } >> "$GITHUB_OUTPUT"
+    - name: Fetch that commit and build
+      shell: bash
+      run: |
+        set -euo pipefail
+        src="$RUNNER_TEMP/engine-src"
+        rm -rf "$src"
+        git init --quiet "$src"
+        git -C "$src" remote add origin "${{ inputs.url }}"
+        git -C "$src" fetch --quiet --depth 1 origin "${{ inputs.commit }}"
+        git -C "$src" checkout --quiet --detach FETCH_HEAD
+        go build -C "$src" -o "$RUNNER_TEMP/repoforge" ./cmd/repoforge
+        chmod +x "$RUNNER_TEMP/repoforge"
+        "$RUNNER_TEMP/repoforge" version
+      env:
+        url: ${{ inputs.url }}
+        commit: ${{ inputs.commit }}
+
+inputs:
+  url:
+    description: Engine repository URL (from the manifest)
+    required: true
+  commit:
+    description: Engine source commit SHA (from the manifest)
+    required: true

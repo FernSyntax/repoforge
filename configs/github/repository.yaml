@@ -1,0 +1,44 @@
+# GitHub governance baseline (profile: baseline), schema v1.
+#
+# The plan-independent foundation shared by every managed repository.
+# Profiles (solo.yaml, team.yaml, strict.yaml) layer rulesets and stricter
+# security on top of this file. Nothing here depends on a paid plan.
+#
+# Security tri-state semantics (see docs/architecture/github-governance.md):
+#   required  — must be applied and verified; any failure is a hard error
+#   preferred — applied when the capability exists; absence is a warning
+#   disabled  — intentionally off; the intentional state is reported
+version: "v1"
+profile: "baseline"
+
+repository:
+  visibility: "public"
+  description: ""          # filled per repository; never hardcoded here
+  topics: []               # filled per repository
+  default_branch: "main"
+  features:
+    issues: true
+    discussions: false
+    projects: false
+    wiki: true             # required by the RepoForge governance standard
+
+merge:
+  allow_squash_merge: true
+  allow_merge_commit: false
+  allow_rebase_merge: false
+  delete_branch_on_merge: true
+  require_linear_history: false
+  allow_auto_merge: false
+
+# Baseline defines no rulesets: on Free-plan private repositories rulesets
+# are unavailable (unsupported-by-plan), so the baseline stays applicable
+# everywhere. Profiles add rulesets explicitly.
+rulesets: {}
+
+security:
+  dependabot_alerts: "required"              # available on all plans
+  dependabot_security_updates: "preferred"   # needs dependency graph
+  secret_scanning: "preferred"               # public: free; private: GHAS
+  secret_scanning_push_protection: "preferred"
+  code_scanning: "preferred"                 # public: free; private: GHAS
+  dependency_review: "preferred"

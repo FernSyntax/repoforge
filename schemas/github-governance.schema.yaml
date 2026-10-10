@@ -1,0 +1,416 @@
+# RepoForge GitHub Governance Configuration — canonical schema, v1.
+#
+# Canonical form; schemas/github-governance.schema.json is derived from this
+# file and must remain identical after parsing.
+#
+# Model documentation: docs/architecture/github-governance.md
+# Plan availability:   docs/reference/github-capabilities.md
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "urn:repoforge:schema:github-governance:v1"
+$comment: "Schema version: v1. Governance documents declare it via the version field. Canonical form: github-governance.schema.yaml; the .json is derived."
+title: "RepoForge GitHub Governance Configuration"
+description: >-
+  Declarative GitHub governance for a managed repository: repository
+  settings, merge methods, rulesets, and security features. This is data,
+  not code; applying it is bootstrap's job with dry-run first (spec.md §10), and
+  auditing it is doctor's job read-only (spec.md §11). GitHub field and endpoint
+  names in descriptions reflect the documented REST API at schema time and
+  must be re-verified before implementation (spec.md §7.2).
+type: object
+additionalProperties: false
+required:
+  - version
+properties:
+  version:
+    type: string
+    const: "v1"
+    description: >-
+      Governance schema version. Tooling must reject unknown versions
+      (spec.md §9.2).
+  profile:
+    type: string
+    enum: ["baseline", "solo", "team", "strict"]
+    default: "baseline"
+    description: >-
+      Which governance profile this document represents. "baseline" is the
+      plan-independent foundation (configs/github/repository.yaml); the
+      others are profiles layered onto it.
+  repository:
+    type: object
+    additionalProperties: false
+    description: >-
+      Repository settings, mapped onto the GitHub "Update a repository"
+      endpoint (PATCH /repos/{owner}/{repo}).
+    properties:
+      visibility:
+        type: string
+        enum: ["public", "private", "internal"]
+        default: "public"
+        description: >-
+          Repository visibility. "internal" requires an organization on
+          GitHub Enterprise. Security-sensitive (spec.md §8.5): never changed
+          silently.
+      description:
+        type: string
+        maxLength: 350
+        default: ""
+        description: "Repository description (GitHub limit: 350 characters)."
+      topics:
+        type: array
+        items:
+          type: string
+          pattern: "^[a-z0-9][a-z0-9-]*$"
+          maxLength: 50
+        uniqueItems: true
+        maxItems: 20
+        default: []
+        description: >-
+          Repository topics (GitHub: lowercase, hyphens; at most 20).
+          Applied via the dedicated topics endpoint, not the general update
+          endpoint.
+      default_branch:
+        type: string
+        pattern: "^[a-zA-Z0-9][a-zA-Z0-9._/-]*$"
+        default: "main"
+        description: >-
+          Default branch (GitHub: default_branch). The standard's own
+          repositories use "main" (spec.md §6.1).
+      features:
+        type: object
+        additionalProperties: false
+        description: "Repository feature toggles."
+        properties:
+          issues:
+            type: boolean
+            default: true
+            description: "Enable Issues (GitHub: has_issues)."
+          discussions:
+            type: boolean
+            default: false
+            description: "Enable Discussions (GitHub: has_discussions)."
+          projects:
+            type: boolean
+            default: false
+            description: >-
+              Enable repository Projects (GitHub: has_projects).
+              Organization Projects are not modeled.
+          wiki:
+            type: boolean
+            default: true
+            description: >-
+              Enable the wiki (GitHub: has_wiki). Must be true in every
+              RepoForge governance profile: the wiki is the seeded
+              documentation surface. Note: wikis on private repositories
+              require GitHub Pro or higher, which is reported as an
+              unsupported-by-plan capability rather than silently
+              skipped.
+  merge:
+    type: object
+    additionalProperties: false
+    description: >-
+      Merge method policy. The allow_* fields are repository settings
+      (PATCH /repos/{owner}/{repo}); require_linear_history is realized as
+      the required_linear_history rule in the main-branch ruleset. The
+      pull_request ruleset rule's allowed_merge_methods must be derived
+      consistently from allow_squash_merge/allow_merge_commit/
+      allow_rebase_merge. At least one merge method must be enabled.
+    anyOf:
+      - properties:
+          allow_squash_merge:
+            const: true
+      - properties:
+          allow_merge_commit:
+            const: true
+      - properties:
+          allow_rebase_merge:
+            const: true
+    properties:
+      allow_squash_merge:
+        type: boolean
+        default: true
+        description: "Allow squash merging (GitHub: allow_squash_merge)."
+      allow_merge_commit:
+        type: boolean
+        default: false
+        description: "Allow merge commits (GitHub: allow_merge_commit)."
+      allow_rebase_merge:
+        type: boolean
+        default: false
+        description: "Allow rebase merging (GitHub: allow_rebase_merge)."
+      delete_branch_on_merge:
+        type: boolean
+        default: true
+        description: >-
+          Delete head branches after merge (GitHub: delete_branch_on_merge).
+      require_linear_history:
+        type: boolean
+        default: false
+        description: >-
+          Require linear history on the default branch. Realized via the
+          ruleset rule required_linear_history. Incompatible with
+          allow_merge_commit: true.
+      allow_auto_merge:
+        type: boolean
+        default: false
+        description: >-
+          Allow auto-merge on pull requests (GitHub: allow_auto_merge).
+          Only effective when required status checks exist.
+  rulesets:
+    type: object
+    additionalProperties: false
+    description: >-
+      Repository rulesets (GitHub: /repos/{owner}/{repo}/rulesets).
+      Availability: public repositories on all plans including Free;
+      private repositories require Pro, Team, or Enterprise. Free-plan
+      private repositories cannot use rulesets — a plan restriction that
+      must surface as a clear diagnostic (docs/reference/github-capabilities.md).
+    properties:
+      main:
+        type: object
+        additionalProperties: false
+        description: >-
+          Branch ruleset targeting the default branch
+          (conditions.ref_name.include: ["~DEFAULT_BRANCH"]).
+        properties:
+          enforcement:
+            type: string
+            enum: ["active", "disabled", "evaluate"]
+            default: "active"
+            description: >-
+              Ruleset enforcement. "evaluate" is only available with GitHub
+              Enterprise (documented in the rulesets API).
+          rules:
+            type: object
+            additionalProperties: false
+            properties:
+              pull_request:
+                type: object
+                additionalProperties: false
+                description: >-
+                  The pull_request rule: all changes arrive via PR.
+                properties:
+                  required_approvals:
+                    type: integer
+                    minimum: 0
+                    maximum: 10
+                    default: 1
+                    description: >-
+                      required_approving_review_count. 0 means PRs are
+                      required but approvals are not — the correct setting
+                      for a solo maintainer, who cannot approve their own
+                      PRs.
+                  dismiss_stale_reviews:
+                    type: boolean
+                    default: true
+                    description: "dismiss_stale_reviews_on_push."
+                  require_last_push_approval:
+                    type: boolean
+                    default: false
+                    description: >-
+                      require_last_push_approval. Needs at least two
+                      distinct people to be meaningful.
+                  require_conversation_resolution:
+                    type: boolean
+                    default: true
+                    description: "required_review_thread_resolution."
+                  require_code_owner_review:
+                    type: boolean
+                    default: false
+                    description: >-
+                      require_code_owner_review. Requires a valid CODEOWNERS
+                      file; code owners on private repositories require Pro
+                      or higher.
+              required_status_checks:
+                type: object
+                additionalProperties: false
+                description: "The required_status_checks rule."
+                properties:
+                  contexts:
+                    type: array
+                    items:
+                      type: string
+                      minLength: 1
+                    uniqueItems: true
+                    default: []
+                    description: >-
+                      Status check contexts that must pass. Resolved against
+                      the repository's actual CI at bootstrap/doctor time;
+                      an empty list means "derive from discovered workflows".
+                  strict:
+                    type: boolean
+                    default: true
+                    description: >-
+                      strict_required_status_checks_policy: branches must be
+                      up to date before merging.
+              require_linear_history:
+                type: boolean
+                default: false
+                description: >-
+                  The required_linear_history rule. Must stay consistent
+                  with merge.require_linear_history; tooling reports
+                  disagreement as a policy error, not drift.
+              require_signed_commits:
+                type: boolean
+                default: false
+                description: >-
+                  The required_signatures rule. "If selected" (governance
+                  task): requires all contributors to have commit signing
+                  configured, so it is opt-in, never defaulted on.
+              block_force_pushes:
+                type: boolean
+                default: true
+                description: "The non_fast_forward rule."
+              block_deletions:
+                type: boolean
+                default: true
+                description: "The deletion rule."
+              metadata_restrictions:
+                type: object
+                additionalProperties: false
+                description: >-
+                  "If selected": commit metadata pattern rules
+                  (commit_message_pattern, commit_author_email_pattern).
+                  Documented as an Enterprise-plan capability for
+                  organizations; detection must classify plan restrictions
+                  as clear diagnostics.
+                properties:
+                  commit_message_pattern:
+                    type: object
+                    additionalProperties: false
+                    required: ["operator", "pattern"]
+                    properties:
+                      operator:
+                        type: string
+                        enum: ["starts_with", "ends_with", "contains", "regex"]
+                      pattern:
+                        type: string
+                        minLength: 1
+                      negate:
+                        type: boolean
+                        default: false
+                  commit_author_email_pattern:
+                    type: object
+                    additionalProperties: false
+                    required: ["operator", "pattern"]
+                    properties:
+                      operator:
+                        type: string
+                        enum: ["starts_with", "ends_with", "contains", "regex"]
+                      pattern:
+                        type: string
+                        minLength: 1
+                      negate:
+                        type: boolean
+                        default: false
+      release_tags:
+        type: object
+        additionalProperties: false
+        description: >-
+          Tag ruleset protecting release tags (target: tag).
+        properties:
+          enforcement:
+            type: string
+            enum: ["active", "disabled", "evaluate"]
+            default: "active"
+            description: "See rulesets.main.enforcement."
+          patterns:
+            type: array
+            items:
+              type: string
+              pattern: "^refs/tags/"
+            uniqueItems: true
+            minItems: 1
+            default: ["refs/tags/v*"]
+            description: >-
+              Ref patterns under refs/tags/ the ruleset applies to.
+          rules:
+            type: object
+            additionalProperties: false
+            properties:
+              block_deletions:
+                type: boolean
+                default: true
+                description: "The deletion rule on matching tags."
+              block_updates:
+                type: boolean
+                default: true
+                description: >-
+                  The update rule: tags, once created, are immutable.
+                  Retagging a release is a governance violation.
+              tag_name_pattern:
+                type: object
+                additionalProperties: false
+                required: ["operator", "pattern"]
+                description: >-
+                  Optional tag_name_pattern rule (e.g. enforce
+                  vMAJOR.MINOR.PATCH shape).
+                properties:
+                  operator:
+                    type: string
+                    enum: ["starts_with", "ends_with", "contains", "regex"]
+                  pattern:
+                    type: string
+                    minLength: 1
+                  negate:
+                    type: boolean
+                    default: false
+  security:
+    type: object
+    additionalProperties: false
+    description: >-
+      Security features. Every field is tri-state, never boolean:
+      "required" = must be applied and verified; failure or plan
+      restriction is a hard diagnostic, never a silent skip. "preferred" =
+      applied when the capability exists; absence is reported as an
+      explicit warning finding. "disabled" = intentionally off; the
+      intentional state is itself reported. This is how the model
+      guarantees security features never fail silently.
+    properties:
+      dependabot_alerts:
+        "$ref": "#/$defs/security_setting"
+        default: "required"
+        description: >-
+          Dependabot alerts (GitHub: PUT/DELETE
+          /repos/{owner}/{repo}/vulnerability-alerts). Available on all
+          plans, public and private.
+      dependabot_security_updates:
+        "$ref": "#/$defs/security_setting"
+        default: "preferred"
+        description: >-
+          Dependabot security updates (GitHub:
+          /repos/{owner}/{repo}/automated-security-fixes). Requires the
+          dependency graph; private repositories on some plans may lack it.
+      secret_scanning:
+        "$ref": "#/$defs/security_setting"
+        default: "preferred"
+        description: >-
+          Secret scanning (GitHub: security_and_analysis.secret_scanning
+          status). Free for public repositories; private repositories
+          require GitHub Secret Protection (GHAS).
+      secret_scanning_push_protection:
+        "$ref": "#/$defs/security_setting"
+        default: "preferred"
+        description: >-
+          Push protection (security_and_analysis.
+          secret_scanning_push_protection). Same plan rules as
+          secret_scanning, which it requires.
+      code_scanning:
+        "$ref": "#/$defs/security_setting"
+        default: "preferred"
+        description: >-
+          Code scanning via CodeQL default setup (GitHub: POST
+          /repos/{owner}/{repo}/code-scanning/default-setup). Free for
+          public repositories; private repositories require GitHub Code
+          Security (GHAS). Languages are auto-detected by default setup.
+      dependency_review:
+        "$ref": "#/$defs/security_setting"
+        default: "preferred"
+        description: >-
+          Dependency review on pull requests. Realized by the
+          dependency-review-action in CI plus the dependency graph.
+          Dependency review enforcement on private repositories requires
+          GitHub Code Security (GHAS).
+$defs:
+  security_setting:
+    type: string
+    enum: ["required", "preferred", "disabled"]

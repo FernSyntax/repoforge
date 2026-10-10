@@ -1,0 +1,34 @@
+#!/bin/sh
+# pre-push — fallback gate that runs the full local verification suite.
+#
+# The authoritative pre-push hook is installed by
+#
+#   pre-commit install --hook-type pre-push
+#
+# which reads its definition from .pre-commit-config.yaml and runs under
+# the same pinned environment as every other hook. This script exists so
+# a developer who has not installed the hooks still gets a working,
+# documented way to gate a push:
+#
+#   scripts/hooks/pre-push
+#
+# It is not installed by scripts/hooks-install (pre-commit owns that
+# stage), and it never mutates the remote.
+set -eu
+
+# cd must not print the target directory when CDPATH is set.
+CDPATH=
+
+repo_root=$(cd -- "$(dirname -- "$0")/../.." && pwd)
+cd "$repo_root"
+
+echo "pre-push: running the full local verification suite"
+echo "pre-push: this is developer feedback; CI and repository rules are the"
+echo "pre-push: authoritative merge gates (spec.md P9)."
+
+if [ ! -x "$repo_root/scripts/verify" ]; then
+	echo "pre-push: scripts/verify is missing or not executable" >&2
+	exit 1
+fi
+
+exec "$repo_root/scripts/verify" full

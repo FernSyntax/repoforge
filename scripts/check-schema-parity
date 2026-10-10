@@ -1,0 +1,33 @@
+#!/bin/sh
+# check-schema-parity — prove each schema's YAML and JSON forms are
+# semantically identical.
+#
+# spec.md §9.1: schemas/repoforge.schema.yaml is canonical and
+# schemas/repoforge.schema.json is a derived translation; both MUST
+# parse to identical documents. The same applies to
+# github-governance.schema.{yaml,json}.
+#
+# The comparison runs through `repoforge schema check` (internal/schematools)
+# rather than a Python script depending on PyYAML. PyYAML cannot be
+# hash-pinned portably, so installing it is reported by the
+# Pinned-Dependencies OpenSSF Scorecard check, and a host with an
+# externally-managed Python refuses the install outright. Doing the
+# comparison in Go means the check carries no dependency beyond the one
+# this repository already has.
+#
+# Read-only. Exits 0 when every pair is identical, 1 on drift, 2 when
+# the schemas cannot be located.
+set -eu
+
+# cd must not print the target directory when CDPATH is set.
+CDPATH=
+
+root=$(CDPATH=; cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$root"
+
+if ! command -v go >/dev/null 2>&1; then
+	echo "check-schema-parity: the Go toolchain is required (go.dev/dl)." >&2
+	exit 2
+fi
+
+exec go run ./cmd/repoforge schema check

@@ -1,0 +1,158 @@
+#!/bin/sh
+# hooks-install — install the developer-side Git hooks, idempotently.
+#
+# The blocking hooks (pre-commit, commit-msg, pre-push) are installed by
+# pre-commit itself, which is the maintained framework and the only
+# supported entry point:
+#
+#   hooks-install
+#
+# The informational hooks (post-commit, post-push) have no pre-commit
+# stage, so they are installed directly into .git/hooks/. Each is written
+# only when the existing file is one we installed, or absent.
+#
+# Usage:
+#   hooks-install [--without-act]   install everything
+#   hooks-install --verify          verify what is installed
+#   hooks-install --uninstall       remove only what we installed
+set -eu
+
+# cd must not print the target directory when CDPATH is set.
+CDPATH=
+
+root=$(CDPATH=; cd -- "$(dirname -- "$0")/.." && pwd -P)
+cd "$root"
+
+MARKER="repoforge-hook"
+
+# hook_script writes a hook into .git/hooks if and only if the existing
+# file is absent or carries our marker. A hook we do not own is never
+# replaced — the operator may have written it.
+install_hook() {
+	name=$1
+	body=$2
+	dest=".git/hooks/$name"
+	if [ -e "$dest" ] && ! grep -q "$MARKER" "$dest" 2>/dev/null; then
+		echo "hooks-install: SKIP $name — $dest exists and is not ours; add the call yourself"
+		return 0
+	fi
+	if [ -e "$dest" ] && grep -q "$MARKER" "$dest" 2>/dev/null; then
+		echo "hooks-install: $name already installed"
+		return 0
+	fi
+	printf '%s\n' "$body" > "$dest"
+	chmod +x "$dest"
+	echo "hooks-install: installed $name"
+}
+
+POST_COMMIT_HOOK="#!/bin/sh
+# $MARKER — informational only.
+#
+# A commit already exists when this runs, so this hook cannot reject
+# anything. It reports what local verification is still outstanding; it
+# never rewrites commits, stages, creates commits, or touches the remote.
+cd \"\$(git rev-parse --show-toplevel)\" || exit 0
+echo 'post-commit: commit recorded.'
+echo 'post-commit: skipped by design here — run before pushing:'
+echo 'post-commit:   scripts/verify fast     (blocking set)'
+echo 'post-commit:   scripts/verify full     (CI mirror, includes race)'
+exit 0
+"
+
+POST_PUSH_HOOK="#!/bin/sh
+# $MARKER — informational only.
+#
+# Reports the state of the pushed branch. It never rewrites history,
+# force-pushes, merges a pull request, or changes repository settings.
+cd \"\$(git rev-parse --show-toplevel)\" || exit 0
+if ! command -v gh >/dev/null 2>&1; then
+	echo 'post-push: gh not installed; cannot report remote check status.' >&2
+	echo 'post-push: local code verification is unaffected.' >&2
+	exit 0
+fi
+if ! gh auth status >/dev/null 2>&1; then
+	echo 'post-push: gh is not authenticated; cannot report remote checks.' >&2
+	echo 'post-push: run \`gh auth login\` if you want this feedback. Local results are unchanged.' >&2
+	exit 0
+fi
+branch=\$(git rev-parse --abbrev-ref HEAD)
+echo \"post-push: pushed \$branch. Open checks:\"
+gh pr checks \"\$branch\" 2>&1 | head -20 || true
+echo 'post-push: this is informational. CI and repository rules are the merge gates.'
+exit 0
+"
+
+install() {
+	if command -v pre-commit >/dev/null 2>&1; then
+		echo "hooks-install: installing blocking hooks via pre-commit"
+		pre-commit install --hook-type pre-commit
+		pre-commit install --hook-type commit-msg
+		pre-commit install --hook-type pre-push
+	else
+		echo "hooks-install: pre-commit is not installed; blocking hooks not installed." >&2
+		echo "hooks-install: install it first:" >&2
+		echo "hooks-install:   pip install pre-commit   (or: brew install pre-commit)" >&2
+		echo "hooks-install:   https://pre-commit.com/#install" >&2
+		exit 2
+	fi
+	install_hook post-commit "$POST_COMMIT_HOOK"
+	install_hook post-push "$POST_PUSH_HOOK"
+	echo "hooks-install: done. See docs/development/git-hooks.md"
+}
+
+verify() {
+	status=0
+	for h in pre-commit commit-msg pre-push; do
+		if [ -x ".git/hooks/$h" ]; then
+			if head -3 ".git/hooks/$h" | grep -q "pre-commit" 2>/dev/null; then
+				echo "hooks-install: $h installed"
+			else
+				echo "hooks-install: $h exists but was not installed by pre-commit"
+				status=1
+			fi
+		else
+			echo "hooks-install: $h NOT installed"
+			status=1
+		fi
+	done
+	for h in post-commit post-push; do
+		if [ -x ".git/hooks/$h" ]; then
+			if grep -q "$MARKER" ".git/hooks/$h" 2>/dev/null; then
+				echo "hooks-install: $h installed"
+			else
+				echo "hooks-install: $h exists but is not ours"
+				status=1
+			fi
+		else
+			echo "hooks-install: $h NOT installed"
+			status=1
+		fi
+	done
+	return $status
+}
+
+uninstall() {
+	if command -v pre-commit >/dev/null 2>&1; then
+		pre-commit uninstall --hook-type pre-commit >/dev/null 2>&1 || true
+		pre-commit uninstall --hook-type commit-msg >/dev/null 2>&1 || true
+		pre-commit uninstall --hook-type pre-push >/dev/null 2>&1 || true
+		echo "hooks-install: removed pre-commit-managed hooks"
+	fi
+	for h in post-commit post-push; do
+		dest=".git/hooks/$h"
+		if [ -e "$dest" ] && grep -q "$MARKER" "$dest" 2>/dev/null; then
+			rm -f "$dest"
+			echo "hooks-install: removed $h"
+		elif [ -e "$dest" ]; then
+			echo "hooks-install: kept $h — it is not ours"
+		fi
+	done
+	echo "hooks-install: uninstall complete; no unrelated hooks were touched"
+}
+
+case "${1:-}" in
+	--verify) verify ;;
+	--uninstall|-u) uninstall ;;
+	"") install ;;
+	*) echo "hooks-install: unknown option \"$1\"" >&2; exit 2 ;;
+esac

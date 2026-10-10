@@ -1,0 +1,71 @@
+# GoReleaser configuration for the repoforge CLI (spec.md §14).
+#
+# Produces version-stamped binaries for five targets, checksum file,
+# SPDX SBOMs, and a GitHub release whose notes are the tag's
+# CHANGELOG.md section. Provenance attestation happens in
+# .github/workflows/release.yml, over dist/checksums.txt (which binds
+# every released file by hash).
+
+version: 2
+
+project_name: repoforge
+
+builds:
+  - id: repoforge
+    main: ./cmd/repoforge
+    binary: repoforge
+    # Static, path-independent binaries: no cgo, no local paths in
+    # the build output. Toolchain version comes from go.mod.
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    # Windows arm64 is excluded: no demand, smaller matrix. Linux and
+    # macOS ship both architectures; Windows ships amd64 only.
+    ignore:
+      - goos: windows
+        goarch: arm64
+    # Version carries the full tag (v0.1.0); Date carries the commit
+    # date (source-derived, so builds stay reproducible — never wall
+    # clock). Commit carries the full SHA. Verify with
+    # `go version -m <binary>`.
+    ldflags:
+      - -s -w
+      - -X github.com/FernSyntax/repoforge/internal/version.Version={{ .Tag }}
+      - -X github.com/FernSyntax/repoforge/internal/version.Commit={{ .FullCommit }}
+      - -X github.com/FernSyntax/repoforge/internal/version.Date={{ .CommitDate }}
+
+archives:
+  - id: repoforge
+    # repoforge_VERSION_OS_ARCH (GoReleaser OS/Arch spellings:
+    # Linux/Darwin/Windows, e.g. repoforge_0.1.0_Linux_amd64).
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    # Windows archives are zip by GoReleaser convention.
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+sboms:
+  - artifacts: archive
+
+release:
+  # Publishing is performed by the Release workflow with `gh release
+  # create`, using the tag's CHANGELOG.md section extracted by
+  # scripts/release-notes.sh and passed with `--release-notes`
+  # (spec.md §14.3, release-process.md R5). Disabling GoReleaser's own
+  # publishing is what makes that possible: a release created by a
+  # side effect cannot be checked for a pre-existing tag before it
+  # exists.
+  disable: true

@@ -1,0 +1,39 @@
+#!/bin/sh
+# need-tool — report a missing tool with the exact install command,
+# instead of the raw "executable not found" a hook would otherwise
+# surface.
+#
+# Usage: need-tool <binary> "<install hint>" [-- <command> [args...]]
+#
+# With no command, it checks availability and exits. With one, it
+# execs it when the binary is present.
+set -eu
+
+# cd must not print the target directory when CDPATH is set.
+CDPATH=
+
+bin=$1
+hint=$2
+shift 2
+
+if [ $# -gt 0 ] && [ "$1" = "--" ]; then
+	shift
+fi
+
+if ! command -v "$bin" >/dev/null 2>&1; then
+	cat >&2 <<EOF
+hooks: required tool "$bin" is not installed; cannot run this check.
+hooks:   install: $hint
+hooks:
+hooks: The check is not skipped silently: a missing tool must not look
+hooks: like a passed check. Install it and re-run, or bypass this commit
+hooks: with --no-verify and note it in the pull request.
+EOF
+	exit 1
+fi
+
+if [ $# -eq 0 ]; then
+	exit 0
+fi
+
+exec "$@"

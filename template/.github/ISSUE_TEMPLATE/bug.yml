@@ -1,0 +1,38 @@
+name: Bug report
+description: Report incorrect behavior
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never include tokens or credentials. If tool output leaked a
+        token, do not file an issue — follow SECURITY.md instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      render: sh
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: repoforge version
+      placeholder: "output of: repoforge --version"
+    validations:
+      required: false
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Go version (if building from source), relevant config.
+      render: text
+    validations:
+      required: false

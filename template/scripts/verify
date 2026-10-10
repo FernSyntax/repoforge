@@ -1,0 +1,160 @@
+#!/bin/sh
+# verify — the authoritative local verification entry point for
+# {{ .ProjectName }}.
+#
+# Language-agnostic by design (spec.md §13.1): this script does not assume a
+# Go project. It checks the repository's own local gates and, when the
+# RepoForge CLI is installed, runs policy validation.
+#
+# Usage:
+#   scripts/verify [fast|full] [--with-act]
+#
+# Levels:
+#   fast   Required baseline files, the RepoForge policy, and any
+#          repository-local script this project declares. The default.
+#   full   Everything in fast, plus the project's own test/build script
+#          when one exists (Makefile, package.json, Cargo.toml, pyproject).
+#
+# Behaviour:
+#   - Prints each command before it runs.
+#   - Propagates real exit codes and never reports success after a
+#     failed step.
+#   - Detects missing tools with install instructions.
+#   - Resolves the repository root, so it works from any directory.
+#
+# CI and repository protection rules are the authoritative merge gates;
+# this script is developer feedback (spec.md P9).
+set -eu
+
+# cd must not print the target directory when CDPATH is set.
+CDPATH=
+
+root=$(cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$root"
+
+LEVEL=fast
+WITH_ACT=0
+for arg in "$@"; do
+	case "$arg" in
+	fast|full)
+		LEVEL="$arg"
+		;;
+	--with-act)
+		WITH_ACT=1
+		;;
+	-h|--help|help)
+		sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+		exit 0
+		;;
+	*)
+		echo "verify: unknown argument \"$arg\"" >&2
+		echo "verify: usage: scripts/verify [fast|full] [--with-act]" >&2
+		exit 2
+		;;
+	esac
+done
+
+step() {
+	printf '\n== %s\n' "$1"
+}
+
+run() {
+	printf '$'
+	for arg in "$@"; do printf ' %s' "$arg"; done
+	printf '\n'
+	"$@"
+}
+
+step "repository root: $root"
+step "verification level: $LEVEL"
+
+# --- fast -------------------------------------------------------------------
+
+step "baseline files"
+missing=0
+for f in README.md LICENSE CHANGELOG.md SECURITY.md; do
+	if [ ! -f "$f" ]; then
+		echo "verify: FAIL — missing required file: $f" >&2
+		missing=1
+	fi
+done
+[ "$missing" = 0 ] || exit 1
+echo "verify: baseline files present"
+
+step "RepoForge policy"
+if command -v repoforge >/dev/null 2>&1; then
+	run repoforge validate
+elif command -v go >/dev/null 2>&1 && [ -f go.mod ]; then
+	# The generated repository has no Go module by definition, so this
+	# branch simply never triggers for one.
+	run go run ./cmd/repoforge validate
+else
+	echo "verify: SKIPPED — repoforge is not installed." >&2
+	echo "verify: This project's policy is enforced in CI (spec.md P9); install the" >&2
+	echo "verify: CLI to check locally: go install github.com/FernSyntax/repoforge/cmd/repoforge@latest" >&2
+	echo "verify: The missing tool is reported, not silently passed." >&2
+fi
+
+step "repository-local verification"
+ran=0
+if [ -x ./scripts/test ]; then
+	run ./scripts/test
+	ran=1
+fi
+if [ -f Makefile ] && command -v make >/dev/null 2>&1; then
+	run make test
+	ran=1
+elif [ -f package.json ] && command -v npm >/dev/null 2>&1; then
+	run npm test --if-present
+	ran=1
+elif [ -f Cargo.toml ] && command -v cargo >/dev/null 2>&1; then
+	run cargo test
+	ran=1
+elif [ -f pyproject.toml ] && command -v pytest >/dev/null 2>&1; then
+	run pytest
+	ran=1
+elif [ -f go.mod ] && command -v go >/dev/null 2>&1; then
+	run go test ./...
+	ran=1
+fi
+if [ "$ran" = 0 ]; then
+	echo "verify: no project test command found; nothing to run at this level."
+	echo "verify: add one of: scripts/test, Makefile, package.json, Cargo.toml, pyproject.toml"
+fi
+
+# --- full -------------------------------------------------------------------
+
+if [ "$LEVEL" = full ]; then
+	step "full level adds the project build"
+	# Language detection mirrors the gauntlet above, so a project with
+	# tests has a build too. Nothing is skipped silently.
+	if [ -f Makefile ] && command -v make >/dev/null 2>&1; then
+		run make
+	elif [ -f package.json ] && command -v npm >/dev/null 2>&1; then
+		run npm run build --if-present
+	elif [ -f Cargo.toml ] && command -v cargo >/dev/null 2>&1; then
+		run cargo build
+	elif [ -f go.mod ] && command -v go >/dev/null 2>&1; then
+		run go build ./...
+	else
+		echo "verify: no project build command found; nothing to run."
+	fi
+fi
+
+# --- opt-in -----------------------------------------------------------------
+
+if [ "$WITH_ACT" = 1 ]; then
+	echo "verify: --with-act requested" >&2
+	if ! command -v act >/dev/null 2>&1; then
+		echo "verify: act is not installed; workflow emulation is not possible." >&2
+		echo "verify: install act 0.2.89 or newer: https://github.com/nektos/act#installation" >&2
+		echo "verify: it also needs a container runtime (docker or podman)." >&2
+		exit 2
+	fi
+	step "workflow emulation with act"
+	run act pull_request -W .github/workflows/ci.yml
+	echo "verify: act is local emulation only; CI remains authoritative."
+fi
+
+step "verify: PASS ($LEVEL)"
+exit 0

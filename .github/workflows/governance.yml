@@ -1,0 +1,104 @@
+# Repository structure gates: issue forms, the pull request template,
+# the ADR index, and the legacy-branding leak gate.
+#
+# Runs on every push to main and every pull request. Read-only: no job
+# writes anything, and top-level permissions are empty.
+
+name: Governance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  forms:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # A form GitHub silently refuses to render is a broken front door.
+      # The checker validates the shape GitHub actually accepts: an
+      # empty required title, an unsupported field type, a missing
+      # label, a duplicate id.
+      - name: Validate issue forms and the PR template
+        run: scripts/check-issue-forms
+
+  decisions:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # validate covers the ADR index (every record indexed, every
+      # indexed name resolvable), the branding gate, internal links, and
+      # the content checks. This job re-runs it so the governance gate
+      # is a named, required check of its own.
+      - name: Validate the repository
+        run: go run ./cmd/repoforge validate
+
+  brand:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The belt to validate's braces: no legacy product name, module
+      # path, or repository URL anywhere in the tracked tree or the
+      # generated output. `validate` enforces this too; this job exists
+      # so the gate is visible and independently attributable.
+      - name: Scan for legacy product branding
+        run: |
+          hits=0
+          while IFS= read -r f; do
+            if grep -rInE '(repo|repro)[-_ ]?doctrine|doctrine[-_ ]?(repo|repro)' -- "$f"; then
+              echo "::error file=$f::legacy product branding must not appear in the tracked tree"
+              hits=$((hits+1))
+            fi
+          done < <(git ls-files)
+          if [ "$hits" -gt 0 ]; then
+            echo "$hits file(s) carry legacy branding" >&2
+            exit 1
+          fi
+          echo "no legacy branding in the tracked tree"
+
+      - name: Scan the generated template for legacy branding
+        run: |
+          rm -rf .template-out
+          scripts/build-template
+          hits=0
+          while IFS= read -r f; do
+            if grep -rInE '(repo|repro)[-_ ]?doctrine|doctrine[-_ ]?(repo|repro)' -- "$f"; then
+              echo "::error file=$f::legacy product branding must not appear in the generated template"
+              hits=$((hits+1))
+            fi
+          done < <(find .template-out -type f)
+          if [ "$hits" -gt 0 ]; then
+            echo "$hits generated file(s) carry legacy branding" >&2
+            exit 1
+          fi
+          echo "no legacy branding in the generated template"

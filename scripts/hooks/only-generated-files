@@ -1,0 +1,61 @@
+#!/bin/sh
+# only-generated-files — a pre-commit guard that refuses staged build
+# output. These paths are regenerable artifacts, never project source:
+#
+#   .template-out/  produced by scripts/build-template (git-ignored)
+#   bin/           locally installed tools such as bin/act (git-ignored)
+#
+# Both are git-ignored, so a plain checkout is never affected. Staging
+# one is always a mistake, so the guard fails and names the exact command
+# that fixes it.
+#
+# pre-commit only invokes this hook when a staged file matches the hook's
+# `files:` pattern; the pattern is re-checked here so the guard behaves
+# correctly when run directly.
+set -eu
+
+# cd must not print the target directory when CDPATH is set.
+CDPATH=
+
+MODE=${1:?usage: only-generated-files --template-output|--local-binaries}
+
+cached=$(mktemp)
+trap 'rm -f "$cached"' EXIT INT TERM
+git diff --cached --name-only --diff-filter=ACMR > "$cached"
+
+# fail prints the staged files that matched, then the reason and the
+# remediation, and exits non-zero so the commit is blocked.
+fail() {
+	pattern=$1
+	reason=$2
+	fix=$3
+	printf 'only-generated-files: staged files:\n' >&2
+	grep -E "$pattern" "$cached" >&2 || true
+	printf 'only-generated-files: %s\n' "$reason" >&2
+	printf 'only-generated-files: %s\n' "$fix" >&2
+	exit 1
+}
+
+case "$MODE" in
+--template-output)
+	if grep -Eq '^\.template-out(/|$)' "$cached"; then
+		fail '^\.template-out(/|$)' \
+			"staged files under .template-out/ are template build output and must never be committed." \
+			"fix with: git rm -r --cached .template-out"
+	fi
+	;;
+--local-binaries)
+	if grep -Eq '^bin(/|$)' "$cached"; then
+		fail '^bin(/|$)' \
+			"staged files under bin/ are locally installed tools and must never be committed." \
+			"fix with: git rm -r --cached bin"
+	fi
+	;;
+*)
+	echo "only-generated-files: unknown mode: $MODE" >&2
+	echo "only-generated-files: usage: only-generated-files --template-output|--local-binaries" >&2
+	exit 2
+	;;
+esac
+
+exit 0

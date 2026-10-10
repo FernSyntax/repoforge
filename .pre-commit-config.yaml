@@ -1,0 +1,161 @@
+# pre-commit configuration for RepoForge.
+#
+# https://pre-commit.com — the maintained, pinned hook framework. Every
+# remote hook revision below is an immutable release tag; no unpinned
+# remote script is ever downloaded and executed.
+#
+# Install (idempotent):
+#   scripts/hooks-install
+# which runs:
+#   pre-commit install --hook-type pre-commit
+#   pre-commit install --hook-type commit-msg
+#   pre-commit install --hook-type pre-push
+#   (and installs the post-commit / post-push informational hooks)
+#
+# Documented setup: docs/development/git-hooks.md
+#
+# Local hooks are developer feedback only. CI and repository protection
+# rules remain the authoritative merge gates (spec.md P9), and hooks can be
+# bypassed with --no-verify; a bypass is visible in the commit record.
+
+default_stages: [pre-commit]
+fail_fast: false
+minimum_pre_commit_version: "3.0.0"
+
+repos:
+  # --- generic hygiene -----------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+        # The policy files are single documents; the GitHub workflows and
+        # the template baseline are too. This catches malformed YAML that
+        # would otherwise reach CI.
+        exclude: ^template/.*$
+      - id: check-json
+        exclude: ^template/.*$
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=800]
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+      - id: check-case-conflict
+      - id: check-symlinks
+      - id: destroyed-symlinks
+      - id: detect-private-key
+      - id: end-of-file-fixer
+        exclude: ^template/.*$
+      - id: mixed-line-ending
+        args: [--fix=lf]
+        exclude: ^template/.*$
+      - id: trailing-whitespace
+        exclude: ^template/.*$
+
+  # --- generated artifacts must not be committed ---------------------------
+  # .template-out/ is the template build output (git-ignored) and bin/
+  # holds locally installed tools. Both are regenerable, so a staged copy
+  # is always a mistake. The guards are real scripts rather than a
+  # `language: fail` message, because a script's behaviour is testable.
+  - repo: local
+    hooks:
+      - id: no-generated-template-output
+        name: no generated template output
+        entry: scripts/hooks/only-generated-files --template-output
+        language: script
+        pass_filenames: false
+        always_run: true
+        files: ^\.template-out/
+      - id: no-local-binaries
+        name: no local binaries
+        entry: scripts/hooks/only-generated-files --local-binaries
+        language: script
+        pass_filenames: false
+        always_run: true
+        files: ^bin/
+
+  # --- Go formatting -------------------------------------------------------
+  # Fail rather than auto-format: silently restaging a corrected file
+  # risks committing something the developer did not review.
+  - repo: local
+    hooks:
+      - id: gofmt
+        name: gofmt
+        entry: gofmt -l
+        language: system
+        types: [go]
+        pass_filenames: true
+        require_serial: true
+
+  # --- secret and credential detection -------------------------------------
+  # spec.md §8.4: no tokens, email addresses or ownership values in any
+  # committed content. Pinned release tag; immutable in practice.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.26.0
+    hooks:
+      - id: gitleaks
+        name: gitleaks (staged content)
+        entry: gitleaks protect --staged --no-banner --redact
+        language: golang
+        pass_filenames: false
+
+  # --- repository-local policy validation ----------------------------------
+  - repo: local
+    hooks:
+      - id: repoforge-validate
+        name: repoforge validate
+        entry: go run ./cmd/repoforge validate
+        language: system
+        pass_filenames: false
+        always_run: true
+
+  # --- template-source validation -----------------------------------------
+  - repo: local
+    hooks:
+      - id: repoforge-template-validate
+        name: repoforge template validate
+        entry: go run ./cmd/repoforge template validate
+        language: system
+        pass_filenames: false
+        always_run: true
+
+  # --- schema pair parity --------------------------------------------------
+  - repo: local
+    hooks:
+      - id: schema-pair-parity
+        name: schema pair parity
+        entry: ./scripts/check-schema-parity
+        language: script
+        pass_filenames: false
+        always_run: true
+
+  # --- workflow and shell lint, only when those files change --------------
+  - repo: local
+    hooks:
+      # Both linters are wrapped so a missing tool reports "how do I
+      # install this" instead of the raw "executable not found", and so a
+      # missing tool can never look like a passed check.
+      - id: actionlint
+        name: actionlint
+        entry: scripts/hooks/need-tool actionlint "https://github.com/rhysd/actionlint#installation (CI pins 1.7.12)" -- actionlint
+        language: script
+        types: [yaml]
+        files: ^\.github/workflows/.*\.ya?ml$
+        require_serial: true
+      - id: shellcheck
+        name: shellcheck
+        entry: scripts/hooks/need-tool shellcheck "apt install shellcheck (or https://github.com/koalaman/shellcheck)" -- shellcheck
+        language: script
+        types: [shell]
+        pass_filenames: true
+
+      # --- commit-msg stage -----------------------------------------------
+      # Declared here because it is the same framework and the same pinned
+      # config; `stages: [commit-msg]` keeps it out of the pre-commit
+      # stage. Installed by `pre-commit install --hook-type commit-msg`.
+      - id: commit-msg
+        name: commit message (Conventional Commits)
+        entry: scripts/hooks/commit-msg
+        language: script
+        stages: [commit-msg]
+        require_serial: true

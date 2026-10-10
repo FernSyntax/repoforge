@@ -1,0 +1,78 @@
+# GitHub governance profile: strict, schema v1.
+#
+# High-assurance repositories. Everything in team.yaml plus signed commits,
+# linear history, two approvals with last-push approval, metadata
+# restrictions, and SemVer tag shape enforcement.
+#
+# Compatibility notes (all surfaced as explicit diagnostics, never silent):
+# - metadata_restrictions: documented as an Enterprise-plan capability for
+#   organizations. On lower plans: unsupported-by-plan.
+# - rulesets.main.rules.metadata_restrictions and
+#   rulesets.release_tags.rules.tag_name_pattern (same Enterprise-plan
+#   family: commit metadata and branch/tag name formats) are declared
+#   here as intent but are not realized in the canonical ruleset
+#   payloads under configs/github/rulesets/ — see configs/README.md.
+# - require_signed_commits ("if selected"): every contributor must have
+#   commit signing configured (GPG/SSH/S/MIME). Enable only when that is
+#   true; there is no partial state.
+# - require_linear_history: incompatible with merge commits; consistent
+#   with the squash-only merge policy below.
+# - enforcement "evaluate" (not used here) is Enterprise-only.
+version: "v1"
+profile: "strict"
+
+repository:
+  visibility: "public"
+  default_branch: "main"
+  features:
+    issues: true
+    discussions: false
+    projects: false
+    wiki: true
+
+merge:
+  allow_squash_merge: true
+  allow_merge_commit: false
+  allow_rebase_merge: false
+  delete_branch_on_merge: true
+  require_linear_history: true
+  allow_auto_merge: false
+
+rulesets:
+  main:
+    enforcement: "active"
+    rules:
+      pull_request:
+        required_approvals: 2
+        dismiss_stale_reviews: true
+        require_last_push_approval: true
+        require_conversation_resolution: true
+        require_code_owner_review: true
+      required_status_checks:
+        contexts: []
+        strict: true
+      require_linear_history: true
+      require_signed_commits: true
+      block_force_pushes: true
+      block_deletions: true
+      metadata_restrictions:
+        commit_message_pattern:
+          operator: "regex"
+          pattern: '^(feat|fix|docs|refactor|perf|test|build|ci|chore|revert|security)(\([a-z0-9-]+\))?!?: .+'
+  release_tags:
+    enforcement: "active"
+    patterns: ["refs/tags/v*"]
+    rules:
+      block_deletions: true
+      block_updates: true
+      tag_name_pattern:
+        operator: "regex"
+        pattern: '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+
+security:
+  dependabot_alerts: "required"
+  dependabot_security_updates: "required"
+  secret_scanning: "required"
+  secret_scanning_push_protection: "required"
+  code_scanning: "required"
+  dependency_review: "required"

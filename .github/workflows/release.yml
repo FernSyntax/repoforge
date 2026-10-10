@@ -1,0 +1,211 @@
+# Production release, orchestrated end to end.
+#
+# The three things that must all be true before anything is published are
+# expressed as jobs with `needs:`, so a pushed `v*` tag can no longer
+# publish binaries merely because it exists:
+#
+#   validate ──> release ──> (Template Publication picks up from here)
+#
+# 1. `validate` proves the tag is strict SemVer, annotated, present in
+#    CHANGELOG.md, and that the tagged commit passes the repository's own
+#    checks. A failure here stops the pipeline before any artifact exists.
+# 2. `release` builds the binaries, extracts the release notes from
+#    CHANGELOG.md, publishes the GitHub release, uploads the assets, and
+#    attests build provenance over the checksum file.
+#
+# Template Publication is a separate workflow triggered by
+# `workflow_run` on this workflow's successful completion, so the App
+# private key never enters a workflow that also builds code, and the
+# template gate cannot fire unless the release itself succeeded.
+#
+# Nothing here runs on branches or pull requests. The only writes are the
+# release and its attestations.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Checkout the tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve the tag
+        id: tag
+        run: |
+          {
+            echo "tag=${GITHUB_REF_NAME}"
+          } >> "$GITHUB_OUTPUT"
+          echo "releasing ${GITHUB_REF_NAME} at $(git rev-parse HEAD)"
+
+      # Tag strictness, annotation, changelog section, and a
+      # version-stamped build — the release policy, before any artifact.
+      - name: Validate the release tag
+        run: scripts/release-check.sh "${GITHUB_REF_NAME}"
+
+      # The tagged commit must itself be a green tree: the release is
+      # built from this source, so a broken tree means a broken release.
+      - name: Validate the repository
+        run: go run ./cmd/repoforge validate
+
+      - name: Prove the schema pairs
+        run: scripts/check-schema-parity
+
+      # The release notes exist and are non-empty. Extracting them here
+      # means the release job cannot fail on a missing section after the
+      # binaries are already built.
+      # The notes are written to RUNNER_TEMP, never into the checkout:
+      # GoReleaser refuses to build a dirty tree, so an untracked notes.md
+      # in the repository aborts the release with "git is in a dirty
+      # state". This is the exact failure the release pipeline hit once.
+      - name: Extract the release notes from CHANGELOG.md
+        run: |
+          ./scripts/release-notes.sh "${GITHUB_REF_NAME}" > "$RUNNER_TEMP/notes.md"
+          echo "notes: $(wc -c < "$RUNNER_TEMP/notes.md") bytes"
+          head -3 "$RUNNER_TEMP/notes.md"
+
+      - name: Upload the release notes for the release job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/notes.md
+          retention-days: 1
+          if-no-files-found: error
+          include-hidden-files: true
+
+  release:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout the tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Download the validated release notes
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/notes
+
+      # GoReleaser shells out to syft for SBOMs; no trusted action
+      # exists, so the pinned release binary (SHA-256 from the
+      # official checksums.txt) is verified and put on PATH. All
+      # scratch files stay in RUNNER_TEMP: anything written to the
+      # checkout trips GoReleaser's clean-tree check and fails the
+      # release.
+      - name: Install syft
+        env:
+          SYFT_VERSION: "1.54.1"
+          SYFT_SHA256: "c069905b391cc4c20a5ba65ad5c10be2a7ba074f8ea6ad203e24d14e303dad47"
+        run: |
+          curl -sSL -o "${RUNNER_TEMP}/syft.tar.gz" "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          echo "${SYFT_SHA256}  ${RUNNER_TEMP}/syft.tar.gz" | sha256sum -c -
+          mkdir -p "${RUNNER_TEMP}/syft"
+          tar -xzf "${RUNNER_TEMP}/syft.tar.gz" -C "${RUNNER_TEMP}/syft" syft
+          echo "${RUNNER_TEMP}/syft" >> "${GITHUB_PATH}"
+
+      # Fixed GoReleaser version (never a range): the action verifies
+      # the downloaded archive against the published checksums itself.
+      # `--release-notes` supplies the CHANGELOG.md section, so the
+      # published notes are this repository's own release record rather
+      # than a generated summary of commit subjects.
+      - name: Build the release without publishing it
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: v2.18.2
+          args: release --clean --skip=publish --release-notes=${{ runner.temp }}/notes/notes.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Release creation is explicit and verified rather than a
+      # GoReleaser side effect, so a tag that already has a release
+      # cannot be silently reused and the asset list is checked.
+      - name: Check the release does not already exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "::error::release ${GITHUB_REF_NAME} already exists; a tag is never reused or moved" >&2
+            exit 1
+          fi
+          echo "release tag ${GITHUB_REF_NAME} is unused"
+
+      - name: Create the release with the CHANGELOG.md notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file "${RUNNER_TEMP}/notes/notes.md" \
+            --verify-tag
+          echo "created release ${GITHUB_REF_NAME}"
+
+      - name: Upload the release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # checksums.txt binds every released file by hash; the SBOMs
+          # and archives are each also listed in it.
+          gh release upload "${GITHUB_REF_NAME}" dist/checksums.txt dist/*.tar.gz dist/*.zip dist/*.sbom.json
+          count=$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets | length')
+          echo "uploaded $count assets"
+          if [ "$count" -lt 11 ]; then
+            echo "::error::expected at least 11 assets (5 archives, 5 SBOMs, checksums.txt), found $count" >&2
+            exit 1
+          fi
+
+      # SLSA build provenance over the checksum file: every archive and
+      # SBOM becomes an attestation subject by digest. Separate SBOM
+      # attestations would add steps without adding coverage.
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: dist/checksums.txt
+
+      - name: Verify the published release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # checksums.txt lists bare file names, so the check must run
+          # from inside dist/. Resolving them against the repository root
+          # reports "FAILED open or read" for every asset that is
+          # perfectly intact — which is exactly what happened before this
+          # was corrected.
+          (cd dist && sha256sum -c checksums.txt)
+          gh release view "${GITHUB_REF_NAME}" --json tagName,isDraft,assets \
+            --jq '{tag: .tagName, draft: .isDraft, assets: (.assets|length)}'

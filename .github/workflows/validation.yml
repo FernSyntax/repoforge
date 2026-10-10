@@ -1,0 +1,114 @@
+# Repository validation: policy, schemas, shell, and workflow lint.
+#
+# Runs on every push to main and every pull request. No job writes
+# anything: top-level permissions are empty and each job declares only
+# the read access it needs. Third-party tools that have no trusted
+# action are fetched as pinned release binaries with embedded SHA-256
+# verification instead of mutable references.
+#
+# This workflow does not duplicate the gates that have workflows of
+# their own: template build and determinism (template.yml), issue forms
+# and the branding gate (governance.yml), and pull-request traceability
+# (pr-traceability.yml). The release gate lives inside release.yml.
+
+name: Validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Validate repository
+        run: go run ./cmd/repoforge validate
+
+  workflows:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # actionlint has no trusted first-party action; the pinned
+      # release binary (SHA-256 from the official checksums.txt) keeps
+      # the dependency immutable without adding a third-party action.
+      - name: Lint workflows
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+        run: |
+          curl -sSL -o actionlint.tar.gz "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          ./actionlint .github/workflows/*.yml
+
+  shell:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # shellcheck has no trusted first-party action; the pinned
+      # release binary (SHA-256 recorded from the official release
+      # asset) keeps the dependency immutable without adding a
+      # third-party action.
+      - name: Lint shell scripts
+        env:
+          SHELLCHECK_VERSION: "0.11.0"
+          SHELLCHECK_SHA256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+        run: |
+          curl -sSL -o shellcheck.tar.xz "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf shellcheck.tar.xz --strip-components=1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+          ./shellcheck scripts/*.sh
+
+  schemas:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Every schema ships as a canonical YAML / derived JSON pair;
+      # both must parse, neither side may go missing, and both must
+      # parse to identical documents.
+      - name: Validate schemas
+        run: |
+          for f in schemas/*.json; do python3 -m json.tool "$f" > /dev/null || exit 1; done
+          for f in schemas/*.yaml; do
+            [ -f "${f%.yaml}.json" ] || { echo "missing derived JSON for $f"; exit 1; }
+          done
+
+      - name: Prove the schema pairs are identical
+        run: scripts/check-schema-parity

@@ -1,0 +1,11 @@
+# Build output
+/dist/
+/build/
+/out/
+
+# Local environment and credentials (never commit)
+.env
+.env.*
+*.token
+*.pem
+*.key

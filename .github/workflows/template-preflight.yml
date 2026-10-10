@@ -1,0 +1,134 @@
+# Template publication preflight: before anything is published, prove
+# the destination, the credential, and the build are all in the state
+# the publication workflow assumes.
+#
+# This workflow is deliberately manual. It never publishes and never
+# tags. It exists so a missing App, a mis-scoped installation, or an
+# unexpected target repository is discovered here rather than halfway
+# through a release.
+#
+# What it checks, and what it cannot:
+#   - It does NOT list Action secrets. A secret-listing check cannot
+#     validate a private key, and an underprivileged GITHUB_TOKEN cannot
+#     even list secrets — it would report "missing" for a secret that is
+#     perfectly well configured. The only meaningful test is minting an
+#     installation token and using it, so that is what this does.
+#   - Minting a token and reading the target repository proves the App is
+#     installed and the token works. It does not prove the write scopes;
+#     those are exercised by the publication job itself.
+
+name: Template Preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      destination:
+        description: "Destination to verify. Must be the canonical template repository."
+        required: true
+        default: "FernSyntax/repoforge-template"
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # The destination is fixed by the workflow, not widened by an
+      # arbitrary input. An input that is not the canonical repository is
+      # refused rather than published to.
+      - name: Refuse any destination but the canonical template repository
+        env:
+          DESTINATION: ${{ inputs.destination }}
+        run: |
+          case "$DESTINATION" in
+            FernSyntax/repoforge-template) ;;
+            *)
+              echo "::error::the preflight only verifies FernSyntax/repoforge-template, got '$DESTINATION'" >&2
+              exit 1
+              ;;
+          esac
+          echo "preflight: destination $DESTINATION"
+
+      # Pinned to a full commit SHA: this action receives the App private
+      # key, so it is the most security-sensitive action here.
+      - name: Mint an installation token scoped to the destination
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.REPOFORGE_APP_ID }}
+          private-key: ${{ secrets.REPOFORGE_APP_PRIVATE_KEY }}
+          owner: FernSyntax
+          repositories: repoforge-template
+          permission-contents: read
+          permission-metadata: read
+
+      - name: Verify the token resolves exactly the destination
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          DESTINATION: ${{ inputs.destination }}
+        run: |
+          resolved=$(gh api "repos/$DESTINATION" 2>&1) || {
+            echo "::error::the target repository $DESTINATION is not readable with the minted token" >&2
+            echo "$resolved" >&2
+            echo "preflight: is the App installed on $DESTINATION and granted Repository metadata: read?" >&2
+            exit 1
+          }
+          printf '%s' "$resolved" | python3 -c '
+          import json, sys
+          r = json.load(sys.stdin)
+          for key in ("full_name", "private", "default_branch", "has_issues", "has_wiki", "is_template"):
+              print(f"  {key}: {r.get(key)}")
+          '
+          full=$(printf '%s' "$resolved" | python3 -c 'import json,sys; print(json.load(sys.stdin)["full_name"])')
+          if [ "$full" != "$DESTINATION" ]; then
+            echo "::error::the token resolved $full, expected $DESTINATION; the installation scope is wrong" >&2
+            exit 1
+          fi
+          echo "preflight: the token resolves exactly $DESTINATION"
+
+      - name: Report the destination state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DESTINATION: ${{ inputs.destination }}
+        run: |
+          commits=$(gh api "repos/$DESTINATION/commits?per_page=1" --jq 'length' 2>/dev/null || echo "?")
+          branches=$(gh api "repos/$DESTINATION/branches" --jq 'length' 2>/dev/null || echo "?")
+          tags=$(gh api "repos/$DESTINATION/tags" --jq 'length' 2>/dev/null || echo "?")
+          releases=$(gh api "repos/$DESTINATION/releases" --jq 'length' 2>/dev/null || echo "?")
+          template=$(gh api "repos/$DESTINATION" --jq '.is_template' 2>/dev/null || echo "?")
+          echo "preflight: commits=$commits branches=$branches tags=$tags releases=$releases"
+          echo "preflight: registered as a GitHub template: $template"
+          echo "preflight: if any count is not zero, the routine update path publishes through a generated PR."
+
+      - name: Build and verify the template locally
+        run: |
+          scripts/build-template
+          go run ./cmd/repoforge template verify --path .template-out
+          scripts/verify-template
+
+      - name: Report
+        run: |
+          echo "preflight: complete."
+          echo "preflight: proven — the App mints a token, the token resolves exactly the"
+          echo "preflight: canonical template repository, and the template builds, verifies, and"
+          echo "preflight: is deterministic."
+          echo "preflight: not proven — the write scopes. Those are exercised by the"
+          echo "preflight: Template Publication workflow on the release tag."

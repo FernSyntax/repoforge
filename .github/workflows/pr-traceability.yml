@@ -1,0 +1,82 @@
+# Pull-request traceability: a PR must link an issue and fill in every
+# section of the pull request template (spec.md §20.2).
+#
+# GitHub-generated dependency pull requests are the one documented
+# exception (spec.md §20.3): Dependabot writes its own body, with no
+# "Closes #N" and none of the template's sections, so no body check
+# could ever pass. Skipping the body check for the `dependabot[bot]`
+# actor keeps the flow usable while the body contract stays mandatory
+# for every human pull request.
+#
+# Runs on every pull request. The body is read from the event payload,
+# never from checked-out code, so untrusted content is treated as data.
+# Top-level permissions are empty; the job needs only issues:read to
+# confirm the referenced issue exists.
+#
+# Exceptions are narrow and named in the body itself:
+# `dependency-pull-request` and `urgent-security-fix`. There is no
+# self-applied bypass label.
+
+name: PR Traceability
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  traceability:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      # Dependabot is the documented exception, identified by actor so it
+      # is visible in the run rather than implied by a label anyone could
+      # apply.
+      - name: Skip the body contract for GitHub-generated dependency PRs
+        if: github.actor == 'dependabot[bot]'
+        run: |
+          echo "::notice::dependency pull request; the body contract does not apply (spec.md §20.3)"
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # The PR body is untrusted input: it is written to a file and
+      # validated as data. Nothing from it is executed or interpreted.
+      - name: Write the pull request body to a file
+        if: github.actor != 'dependabot[bot]'
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/pr"
+          printf '%s' "$BODY" > "$RUNNER_TEMP/pr/body.md"
+          echo "body bytes: $(wc -c < "$RUNNER_TEMP/pr/body.md")"
+
+      - name: Build the checker
+        if: github.actor != 'dependabot[bot]'
+        run: go build -o "$RUNNER_TEMP/repoforge" ./cmd/repoforge
+
+      # Issue existence is validated when the token and event payload
+      # permit it. On a pull request from a fork the token cannot read
+      # the issue, and the check says so rather than pretending to have
+      # confirmed it.
+      - name: Check linkage and required sections
+        if: github.actor != 'dependabot[bot]'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          "$RUNNER_TEMP/repoforge" pr check-body --file "$RUNNER_TEMP/pr/body.md" --repo "$GITHUB_REPOSITORY"

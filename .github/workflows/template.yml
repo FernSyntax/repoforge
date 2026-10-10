@@ -1,0 +1,99 @@
+# Template build and verification: the published template must be a
+# faithful, reproducible build of the recorded RepoForge source.
+#
+# Runs on every push to main and every pull request. No job writes
+# anything: top-level permissions are empty and each job declares only
+# the read access it needs.
+#
+# The provenance proof is the point. A tree that regenerates a matching
+# manifest can still fail, because the recorded source commit cannot
+# produce bytes it never contained.
+
+name: Template
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Validate the template source
+        run: go run ./cmd/repoforge template validate
+
+      - name: Build the template
+        run: scripts/build-template
+
+      - name: Verify the built tree against the template model and its manifest
+        run: go run ./cmd/repoforge template verify --path .template-out
+
+      - name: Prove the build is deterministic
+        run: scripts/verify-template
+
+      # Determinism is checked twice, from two different angles: the
+      # verify-template diff proves byte equality with a fresh build,
+      # and this job proves it does not depend on the previous output
+      # directory existing at all.
+      - name: Rebuild into a clean directory
+        run: |
+          work="$(mktemp -d)"
+          scripts/build-template "$work/rebuilt"
+          diff -r .template-out "$work/rebuilt"
+          rm -rf "$work"
+
+      # Every generated file the manifest records must be present, and
+      # nothing the manifest does not record may be present.
+      - name: Check the manifest describes exactly the tree
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import stat
+          import sys
+
+          root = pathlib.Path(".template-out")
+          manifest = json.loads((root / "repoforge.manifest.json").read_text())
+          recorded = {entry["path"] for entry in manifest["files"]}
+          actual = set()
+          for path in root.rglob("*"):
+              if path.is_file():
+                  actual.add(path.relative_to(root).as_posix())
+          actual.discard("repoforge.manifest.json")
+          if recorded != actual:
+              print("manifest and tree disagree", file=sys.stderr)
+              print("  only in manifest:", sorted(recorded - actual), file=sys.stderr)
+              print("  only in tree:", sorted(actual - recorded), file=sys.stderr)
+              sys.exit(1)
+          for entry in manifest["files"]:
+              data = (root / entry["path"]).read_bytes()
+              digest = hashlib.sha256(data).hexdigest()
+              if digest != entry["sha256"]:
+                  print(f"{entry['path']}: digest is {digest}, manifest records {entry['sha256']}", file=sys.stderr)
+                  sys.exit(1)
+              mode = stat.S_IMODE((root / entry["path"]).stat().st_mode)
+              if f"{mode:04o}" != entry["mode"]:
+                  print(f"{entry['path']}: mode is {mode:04o}, manifest records {entry['mode']}", file=sys.stderr)
+                  sys.exit(1)
+          print(f"manifest describes exactly {len(recorded)} files with matching digests and modes")
+          PY

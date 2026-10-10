@@ -1,0 +1,39 @@
+#!/bin/sh
+# commit-msg — commit-message hook wrapper.
+#
+# pre-commit passes the path of the commit message file as its single
+# argument; `repoforge git commit-check` expects the message itself.
+# This wrapper bridges the two so the CLI keeps one interface and the
+# exact commit message — including comment lines the editor added — is
+# what gets checked.
+#
+# The check implements the Conventional Commits contract (spec.md §6.8,
+# docs/development/commit-conventions.md):
+#
+#   - structure is enforced (type from the allowed set, imperative
+#     subject, no trailing period, no placeholder or secret text);
+#   - over-length subjects and non-imperative starts are WARN guidance,
+#     never failures, per C2's Recommended level;
+#   - GitHub's synthetic `Merge <sha> into <sha>` test-merge commits are
+#     exempted exactly, so human merges still fail.
+#
+# Exit codes: 0 = acceptable, 1 = violation, 2 = usage or tooling error.
+set -eu
+
+# cd must not print the target directory when CDPATH is set.
+CDPATH=
+
+msg_file=${1:?usage: commit-msg <message-file>}
+if [ ! -f "$msg_file" ]; then
+	echo "commit-msg: no such message file: $msg_file" >&2
+	exit 2
+fi
+
+repo_root=$(cd -- "$(dirname -- "$0")/../.." && pwd)
+cd "$repo_root"
+
+# The message reaches the CLI as a single argument, so a multi-line
+# message is not word-split into a mangled one-line subject. `go run`
+# needs the value quoted; the CLI joins any further positional arguments
+# with a single space, which is exactly what a single argument gives.
+exec go run ./cmd/repoforge git commit-check "$(cat "$msg_file")"

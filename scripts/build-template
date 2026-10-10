@@ -1,0 +1,67 @@
+#!/bin/sh
+# build-template renders the repoforge-template baseline from the
+# canonical template/ directory. The engine repository is the source
+# of truth; template/ is never hand-edited into the template repo.
+#
+# Output defaults to .template-out/ (ignored by Git). No variables are
+# rendered: placeholders stay for adoption-time resolution, which keeps
+# every build canonical and byte-identical. Read-only apart from the
+# output directory it replaces and writes; prints every step.
+#
+# --force is passed explicitly because .template-out/ is a regenerable
+# build artifact, not user data: the builder refuses to replace a
+# non-empty destination by default, and this script declares its own
+# destination.
+#
+# Release builds pass the complete immutable provenance so the generated
+# tree carries the RepoForge version, tag, commit, and URL it came from:
+#
+#   scripts/build-template OUT --repoforge-version v0.1.0 \
+#     --source-ref v0.1.0 --source-commit <40-hex sha> \
+#     --source-url https://github.com/FernSyntax/repoforge
+#
+# All four travel together: a manifest missing any of them cannot be
+# verified, and `template verify --require-source` refuses it.
+set -eu
+
+[ -f go.mod ] || { echo "error: run from the repository root" >&2; exit 1; }
+
+out=".template-out"
+source_ref=""
+source_commit=""
+source_url=""
+forge_version=""
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--source-ref)
+		[ $# -ge 2 ] || { echo "error: --source-ref needs a value" >&2; exit 1; }
+		source_ref="$2"; shift 2 ;;
+	--source-commit)
+		[ $# -ge 2 ] || { echo "error: --source-commit needs a value" >&2; exit 1; }
+		source_commit="$2"; shift 2 ;;
+	--source-url)
+		[ $# -ge 2 ] || { echo "error: --source-url needs a value" >&2; exit 1; }
+		source_url="$2"; shift 2 ;;
+	--repoforge-version)
+		[ $# -ge 2 ] || { echo "error: --repoforge-version needs a value" >&2; exit 1; }
+		forge_version="$2"; shift 2 ;;
+	-*)
+		echo "error: unknown option $1" >&2; exit 1 ;;
+	*)
+		out="$1"; shift ;;
+	esac
+done
+
+echo "validating template source"
+go run ./cmd/repoforge template validate --path template
+
+echo "building template into $out"
+# shellcheck disable=SC2086 # provenance flags are optional by design
+go run ./cmd/repoforge template build --path template --out "$out" --force \
+	${forge_version:+--repoforge-version "$forge_version"} \
+	${source_ref:+--source-ref "$source_ref"} \
+	${source_commit:+--source-commit "$source_commit"} \
+	${source_url:+--source-url "$source_url"}
+
+echo "template built at $out"

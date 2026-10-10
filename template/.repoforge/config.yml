@@ -1,0 +1,23 @@
+# RepoForge configuration for {{ .ProjectName }}.
+# Schema: repository contract v1.
+standard:
+  name: "repoforge"
+  version: "{{ .StandardVersion }}"
+
+repository:
+  governance_profile: "solo"
+  visibility: "public"
+  default_branch: "main"
+
+git:
+  commit_style: "conventional"
+  branch_style: "type-issue-description"
+
+github:
+  # The RepoForge governance standard requires both: Issues are the
+  # unit of work and the wiki holds the seeded documentation.
+  issues: true
+  wiki: true
+
+project:
+  kind: "application"

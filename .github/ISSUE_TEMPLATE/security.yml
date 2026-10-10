@@ -1,0 +1,43 @@
+name: Security report
+description: Non-exploitable security concerns only — use the private path for anything actionable
+labels: ["security"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not report an exploitable vulnerability with this form.**
+        Use the private vulnerability reporting path in
+        [SECURITY.md](SECURITY.md) (repository → Security → Report a
+        vulnerability). That path creates a private advisory only
+        maintainers can see.
+
+        This form is for hardening questions, policy gaps, and
+        non-exploitable concerns that are safe to discuss in public.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind of report
+      options:
+        - "hardening suggestion (nothing exploitable today)"
+        - "documentation gap in the security model"
+        - "policy or configuration weakness that is not exploitable"
+        - "question about a security boundary"
+    validations:
+      required: true
+  - type: textarea
+    id: concern
+    attributes:
+      label: Concern
+      description: |
+        What is the weakness? Do not include a proof of concept, a
+        token, or a credential. Reference spec.md section or ADR numbers
+        where possible.
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested mitigation
+      description: If you have one. "None" is acceptable.
+    validations:
+      required: false

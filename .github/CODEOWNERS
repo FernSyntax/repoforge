@@ -1,0 +1,20 @@
+# Ownership for this repository.
+#
+# {{ .Owner }} is a template variable resolved by bootstrap from the
+# repository's ownership inputs — it is not a valid GitHub identity
+# until resolved. Do not replace it by hand (spec.md §8.4).
+#
+# Every rule below requires owner review when branch protection has
+# "Require review from Code Owners" enabled.
+
+# Default owner for everything not matched below.
+* {{ .Owner }}
+
+# Security-sensitive and standard-defining paths: explicit owner review.
+/.github/workflows/ {{ .Owner }}
+/.github/CODEOWNERS {{ .Owner }}
+/SECURITY.md {{ .Owner }}
+/spec.md {{ .Owner }}
+/schemas/ {{ .Owner }}
+/internal/github/ {{ .Owner }}
+/scripts/ {{ .Owner }}

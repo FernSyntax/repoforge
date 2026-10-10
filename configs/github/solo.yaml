@@ -1,0 +1,64 @@
+# GitHub governance profile: solo, schema v1.
+#
+# One maintainer. Enforces the branch+PR+CI flow without requiring approvals
+# a solo maintainer cannot give (GitHub does not let authors approve their
+# own PRs). Layers onto configs/github/repository.yaml.
+#
+# Compatibility notes:
+# - Rulesets: public repos on all plans; private repos need Pro/Team/
+#   Enterprise. On a Free-plan private repo these rulesets are
+#   unsupported-by-plan and tooling must say so explicitly.
+# - secret_scanning / push protection "required" below assumes a public
+#   repository. For a private repository without GitHub Secret Protection,
+#   lower them to "preferred" or "disabled" explicitly — never silently.
+version: "v1"
+profile: "solo"
+
+repository:
+  visibility: "public"
+  default_branch: "main"
+  features:
+    issues: true
+    discussions: false
+    projects: false
+    wiki: true
+
+merge:
+  allow_squash_merge: true
+  allow_merge_commit: false
+  allow_rebase_merge: false
+  delete_branch_on_merge: true
+  require_linear_history: true
+  allow_auto_merge: false
+
+rulesets:
+  main:
+    enforcement: "active"
+    rules:
+      pull_request:
+        required_approvals: 0            # solo: PR flow without self-approval theater
+        dismiss_stale_reviews: false     # no reviewers to dismiss
+        require_last_push_approval: false
+        require_conversation_resolution: true
+        require_code_owner_review: false
+      required_status_checks:
+        contexts: []                     # derived from discovered CI workflows
+        strict: true
+      require_linear_history: true
+      require_signed_commits: false
+      block_force_pushes: true
+      block_deletions: true
+  release_tags:
+    enforcement: "active"
+    patterns: ["refs/tags/v*"]
+    rules:
+      block_deletions: true
+      block_updates: true                # release tags are immutable
+
+security:
+  dependabot_alerts: "required"
+  dependabot_security_updates: "required"
+  secret_scanning: "required"            # free on public repos
+  secret_scanning_push_protection: "required"
+  code_scanning: "preferred"
+  dependency_review: "preferred"

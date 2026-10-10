@@ -1,0 +1,13 @@
+# Ownership declarations for {{ .ProjectName }} (contract ownership
+# model; consumed by RepoForge tooling).
+managed_paths:
+  - ".github/workflows/*.yml"
+
+scaffolded_paths:
+  - "README.md"
+  - "docs/**"
+
+user_owned_paths:
+  - "src/**"
+
+placeholder_paths: []

@@ -1,0 +1,64 @@
+# GitHub governance profile: team, schema v1.
+#
+# Multiple maintainers with real review. Assumes a plan where private-repo
+# rulesets exist (Pro/Team/Enterprise) or a public repository. Layers onto
+# configs/github/repository.yaml.
+#
+# Compatibility notes:
+# - require_code_owner_review needs a valid CODEOWNERS file; CODEOWNERS on
+#   private repositories requires Pro or higher.
+# - code_scanning / dependency_review "required": on private repositories
+#   these require GitHub Code Security (a Team add-on, included in
+#   Enterprise). A private repository without it yields an explicit
+#   unsupported-by-plan diagnostic — by design, not a silent skip.
+version: "v1"
+profile: "team"
+
+repository:
+  visibility: "public"
+  default_branch: "main"
+  features:
+    issues: true
+    discussions: false
+    projects: false
+    wiki: true
+
+merge:
+  allow_squash_merge: true
+  allow_merge_commit: false
+  allow_rebase_merge: false
+  delete_branch_on_merge: true
+  require_linear_history: true
+  allow_auto_merge: false
+
+rulesets:
+  main:
+    enforcement: "active"
+    rules:
+      pull_request:
+        required_approvals: 1
+        dismiss_stale_reviews: true
+        require_last_push_approval: false
+        require_conversation_resolution: true
+        require_code_owner_review: true
+      required_status_checks:
+        contexts: []
+        strict: true
+      require_linear_history: true
+      require_signed_commits: false
+      block_force_pushes: true
+      block_deletions: true
+  release_tags:
+    enforcement: "active"
+    patterns: ["refs/tags/v*"]
+    rules:
+      block_deletions: true
+      block_updates: true
+
+security:
+  dependabot_alerts: "required"
+  dependabot_security_updates: "required"
+  secret_scanning: "required"
+  secret_scanning_push_protection: "required"
+  code_scanning: "required"
+  dependency_review: "required"

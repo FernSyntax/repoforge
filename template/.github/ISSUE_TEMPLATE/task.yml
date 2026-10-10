@@ -1,0 +1,25 @@
+name: Task
+description: Scoped maintenance or engineering work
+labels: ["task"]
+body:
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What is in scope — and what is explicitly out of scope.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How we know the task is done (checks, tests, docs).
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Links to issues, ADRs, or spec.md sections that authorize this work.
+    validations:
+      required: false

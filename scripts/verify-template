@@ -1,0 +1,54 @@
+#!/bin/sh
+# verify-template proves that a built template directory is a faithful,
+# reproducible build.
+#
+# It checks three things, in order:
+#
+#   1. the tree satisfies the template model and its own manifest;
+#   2. `template verify` rebuilds the tree from the source commit the
+#      manifest records and compares byte-for-byte;
+#   3. a second local build is byte-identical to the first.
+#
+# Check 3 is where a provenance bug hides. Rebuilding with a plain build
+# while the original carries provenance produces a different manifest and
+# therefore a false failure, so the rebuild reuses the provenance the
+# existing manifest already records, obtained through
+# `repoforge template provenance`.
+#
+# Usage: verify-template [dir] (default .template-out/).
+# Read-only apart from a throwaway temp directory.
+set -eu
+
+[ -f go.mod ] || { echo "error: run from the repository root" >&2; exit 1; }
+
+dir="${1:-.template-out}"
+[ -d "$dir" ] || { echo "error: no built template at $dir (run scripts/build-template first)" >&2; exit 1; }
+
+echo "validating $dir against the template model and its manifest"
+go run ./cmd/repoforge template verify --path "$dir"
+echo "$dir is valid"
+
+# The provenance this tree was built with. An adopted tree carries none,
+# so nothing is passed and a plain build is the correct comparison.
+echo "reading the provenance recorded in $dir/repoforge.manifest.json"
+provenance="$(go run ./cmd/repoforge template provenance --path "$dir")"
+printf 'rebuilding with: %s\n' "$provenance"
+
+# The flags are `--name value` pairs with no embedded whitespace, so
+# word splitting is safe and is the only POSIX way to forward them.
+# shellcheck disable=SC2086
+set -- $provenance
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT INT TERM
+
+echo "rebuilding from template/ with the same provenance"
+# shellcheck disable=SC2086 # forwarding the recorded provenance is the point
+go run ./cmd/repoforge template build --path template --out "$tmp/rebuilt" --force "$@"
+if diff -r "$dir" "$tmp/rebuilt" >/dev/null; then
+	echo "$dir is deterministic"
+else
+	echo "error: $dir differs from a fresh build with the same provenance" >&2
+	diff -r "$dir" "$tmp/rebuilt" >&2 || true
+	exit 1
+fi

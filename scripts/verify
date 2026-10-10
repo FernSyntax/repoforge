@@ -1,0 +1,247 @@
+#!/bin/sh
+# verify — the single authoritative local verification entry point.
+#
+# Usage:
+#   scripts/verify [fast|full] [--with-act] [--with-integration]
+#
+# Levels:
+#   fast   Formatting, build, unit tests, repository validation,
+#          template-source validation, and the issue-form check
+#          (scripts/check-issue-forms). Offline, deterministic, minutes.
+#          This is the default and the pre-commit hook's blocking set.
+#   full   Everything in fast, plus race detection, schema-pair parity,
+#          a fresh template build (scripts/build-template) and its
+#          reproducibility proof (scripts/verify-template), and — when
+#          installed — workflow and shell linting. This mirrors CI.
+#
+# Flags:
+#   --with-act          Also emulate the safe pull_request and validation
+#                       workflows under `act`. Never the release,
+#                       scorecard, or secret-detection workflows: they
+#                       publish, require real credentials, or need git
+#                       history a local run cannot reproduce. Requires
+#                       act and a container runtime.
+#   --with-integration   Also run the opt-in integration suite against
+#                       REPOFORGE_TEST_REPO, plus the e2e suite when
+#                       REPOFORGE_E2E is enabled.
+#
+# Behaviour:
+#   - Validates its own options and prerequisites BEFORE running any
+#     check, so a usage error costs nothing.
+#   - Prints the exact command before executing it.
+#   - Fails on the first failing check and propagates its exit code.
+#   - Never reports success after a failed check.
+#   - Detects missing tools and names the install instructions.
+#   - Resolves the repository root, so it works from any directory.
+#   - Makes no network access at fast or full; only the opt-ins do.
+#
+# CI and repository rules are the authoritative merge gates; this script
+# is developer feedback (spec.md P9). Local hooks are bypassable.
+set -eu
+
+# cd must not print the target directory when CDPATH is set.
+CDPATH=
+
+# Resolve the repository root without depending on the caller's cwd.
+root=$(cd -- "$(dirname -- "$0")/.." && pwd -P)
+cd "$root"
+
+LEVEL=fast
+WITH_ACT=0
+WITH_INTEGRATION=0
+
+for arg in "$@"; do
+	case "$arg" in
+	fast|full)
+		LEVEL="$arg"
+		;;
+	--with-act)
+		WITH_ACT=1
+		;;
+	--with-integration)
+		WITH_INTEGRATION=1
+		;;
+	-h|--help|help)
+		sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'
+		exit 0
+		;;
+	*)
+		echo "verify: unknown argument \"$arg\"" >&2
+		echo "verify: usage: scripts/verify [fast|full] [--with-act] [--with-integration]" >&2
+		exit 2
+		;;
+	esac
+done
+
+# --- opt-in prerequisites, checked before anything runs --------------------
+
+# These are opt-ins that touch the network or a real repository, so a
+# missing prerequisite is a usage error the operator must resolve first —
+# not a step to run after three minutes of suite time and then discover.
+if [ "$WITH_ACT" = 1 ] && ! command -v act >/dev/null 2>&1; then
+	echo "verify: --with-act needs act, which is not installed." >&2
+	echo "verify: install act 0.2.89 or newer (bin/act holds a local copy):" >&2
+	echo "verify:   https://github.com/nektos/act#installation" >&2
+	echo "verify: act also needs a container runtime (docker or podman)." >&2
+	echo "verify: act is local emulation only; CI remains authoritative." >&2
+	exit 2
+fi
+
+if [ "$WITH_INTEGRATION" = 1 ]; then
+	if [ -z "${REPOFORGE_TEST_REPO:-}" ]; then
+		echo "verify: --with-integration requires REPOFORGE_TEST_REPO." >&2
+		echo "verify: set it to a disposable owner/name slug — the suite" >&2
+		echo "verify: refuses slugs that do not read as throwaways. A token" >&2
+		echo "verify: is required, from GH_TOKEN or GITHUB_TOKEN." >&2
+		exit 2
+	fi
+	case "$REPOFORGE_TEST_REPO" in
+	*/*) ;;
+	*)
+		echo "verify: REPOFORGE_TEST_REPO must be owner/name, got \"$REPOFORGE_TEST_REPO\"" >&2
+		exit 2
+		;;
+	esac
+fi
+
+# --- helpers ---------------------------------------------------------------
+
+step() {
+	printf '\n== %s\n' "$1"
+}
+
+run() {
+	printf '$'
+	for arg in "$@"; do printf ' %s' "$arg"; done
+	printf '\n'
+	"$@"
+}
+
+need() {
+	if command -v "$1" >/dev/null 2>&1; then
+		return 0
+	fi
+	echo "verify: required tool \"$1\" is not installed." >&2
+	echo "verify: $2" >&2
+	exit 2
+}
+
+skip() {
+	echo "verify: SKIPPED — $1 is not installed ($2); install: $3"
+}
+
+step "repository root: $root"
+step "verification level: $LEVEL"
+
+# --- level: fast -----------------------------------------------------------
+
+step "gofmt"
+need gofmt "gofmt ships with the Go toolchain (go.dev/dl)."
+unformatted=$(gofmt -l .)
+if [ -n "$unformatted" ]; then
+	echo "verify: FAIL — these files are not gofmt-clean:" >&2
+	echo "$unformatted" >&2
+	echo "verify: fix with: gofmt -w ." >&2
+	exit 1
+fi
+echo "verify: gofmt clean"
+
+step "go vet"
+run go vet ./...
+
+step "go build"
+run go build ./...
+
+step "go test"
+run go test ./...
+
+step "repository validation (offline, deterministic; spec.md §12)"
+run go run ./cmd/repoforge validate
+
+step "template-source validation (spec.md §13)"
+run go run ./cmd/repoforge template validate
+
+step "schema pairs"
+for f in schemas/*.json; do
+	run python3 -m json.tool "$f"
+done > /dev/null
+for f in schemas/*.yaml; do
+	if [ ! -f "${f%.yaml}.json" ]; then
+		echo "verify: FAIL — missing derived JSON for $f" >&2
+		exit 1
+	fi
+done
+echo "verify: both schema pairs are present and parse as JSON"
+
+step "issue forms and PR template"
+run scripts/check-issue-forms
+
+# --- level: full -----------------------------------------------------------
+
+if [ "$LEVEL" = full ]; then
+	step "race detection"
+	run go test -race ./...
+
+	step "schema pair parity"
+	run scripts/check-schema-parity
+
+	# Rebuild first: .template-out/ is a regenerable artifact, and a
+	# stale one would make the determinism proof compare against yesterday.
+	step "template build"
+	run scripts/build-template
+
+	step "template reproducibility proof"
+	run scripts/verify-template
+
+	# Module integrity is local and cheap; govulncheck needs the network
+	# and stays in CI, where the failure is a blocking gate.
+	step "module integrity"
+	run go mod verify
+
+	if command -v shellcheck >/dev/null 2>&1; then
+		step "shell lint"
+		run shellcheck scripts/*.sh scripts/verify scripts/build-template \
+			scripts/verify-template scripts/check-schema-parity \
+			scripts/check-issue-forms scripts/hooks-install \
+			scripts/release-check.sh scripts/hooks/commit-msg \
+			scripts/hooks/need-tool scripts/hooks/only-generated-files \
+			scripts/hooks/pre-push
+	else
+		skip shellcheck "not installed" \
+			"apt install shellcheck, or https://github.com/koalaman/shellcheck"
+	fi
+
+	if command -v actionlint >/dev/null 2>&1; then
+		step "workflow lint"
+		run actionlint .github/workflows/*.yml
+	else
+		skip actionlint "not installed" \
+			"https://github.com/rhysd/actionlint#installation (CI pins 1.7.12)"
+	fi
+fi
+
+# --- opt-ins ----------------------------------------------------------------
+
+if [ "$WITH_ACT" = 1 ]; then
+	step "workflow emulation with act: pull_request (tests, validation)"
+	run act pull_request -W .github/workflows/tests.yml
+	run act pull_request -W .github/workflows/validation.yml
+	echo "verify: act proves how these workflows behave locally; it does not prove"
+	echo "verify: hosted secrets, permissions, hosted runners, attestations, or"
+	echo "verify: remote API behaviour work the same way in production."
+fi
+
+if [ "$WITH_INTEGRATION" = 1 ]; then
+	step "integration tests against REPOFORGE_TEST_REPO"
+	run go test ./internal/integration/
+	if [ "${REPOFORGE_E2E:-}" = 1 ]; then
+		step "end-to-end lifecycle tests (disposable repository)"
+		run go test ./tests/e2e/
+	else
+		echo "verify: skipping tests/e2e — set REPOFORGE_E2E=1 to also run"
+		echo "verify: the disposable-repository lifecycle suite."
+	fi
+fi
+
+step "verify: PASS ($LEVEL)"
+exit 0
