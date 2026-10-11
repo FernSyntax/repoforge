@@ -11,7 +11,9 @@ fixes.
 
 Use GitHub's private vulnerability reporting: this repository's
 **Security tab → Report a vulnerability**. This creates a private
-advisory visible only to the maintainers and you.
+advisory visible only to the maintainers and you. GitHub documents the
+mechanism at
+[Privately reporting a security vulnerability](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability).
 
 Please include:
 
