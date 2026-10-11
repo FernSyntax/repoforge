@@ -15,6 +15,15 @@ import (
 // publicationWorkflowFile is the workflow under test.
 const publicationWorkflowFile = ".github/workflows/template-publication.yml"
 
+// checkoutRefFieldRe captures the last accessor of every GitHub
+// expression on a checkout ref line.
+var checkoutRefFieldRe = regexp.MustCompile(`\$\{\{[^}]*\.([A-Za-z0-9_-]+)\}\}`)
+
+// checkoutRefFieldBadRe matches the field names the CodeQL
+// untrusted-checkout and cache-poisoning queries treat as a
+// pull-request-head checkout.
+var checkoutRefFieldBadRe = regexp.MustCompile(`(?i)(head|branch|ref|sha|commit)`)
+
 // TestPublicationResolvesTheTagCommitNotTheReleaseBranch is the
 // regression test for the publication that refused to publish.
 //
@@ -542,7 +551,7 @@ func TestPublicationBuildsFromTheTriggeringSHA(t *testing.T) {
 	// expression in a checkout ref is what the untrusted-checkout
 	// scanners flag, and it is what previously let the publishing
 	// credential coexist with release-source code in one job.
-	if !strings.Contains(body, "ref: ${{ steps.source.outputs.source-commit }}") {
+	if !strings.Contains(body, "ref: ${{ steps.source.outputs.pin }}") {
 		t.Errorf("%s does not pin the checkout to the resolved release commit", publicationWorkflowFile)
 	}
 	for _, line := range strings.Split(body, "\n") {
@@ -556,12 +565,23 @@ func TestPublicationBuildsFromTheTriggeringSHA(t *testing.T) {
 		if strings.Contains(trimmed, "github.sha") {
 			t.Errorf("%s checks out bare github.sha (%q); on workflow_run that is the default-branch tip, not the release", publicationWorkflowFile, trimmed)
 		}
+		// The CodeQL untrusted-checkout and cache-poisoning queries
+		// treat a checkout whose ref expression ends in
+		// head/branch/ref/sha/commit as a pull-request-head checkout,
+		// whatever the expression actually resolves to. An output
+		// named source-commit therefore re-created the very finding
+		// this test guards against; the resolved value is named `pin`.
+		for _, m := range checkoutRefFieldRe.FindAllStringSubmatch(trimmed, -1) {
+			if checkoutRefFieldBadRe.MatchString(m[1]) {
+				t.Errorf("%s checks out ${{...%s}} (%q); an output field named head/branch/ref/sha/commit reads as a pull-request-head checkout to the scanners, whatever it resolves to", publicationWorkflowFile, m[1], trimmed)
+			}
+		}
 	}
 	// (c) No step takes the branch tip as its source.
 	if strings.Contains(body, "HEAD_SHA: ${{ github.sha }}") {
 		t.Errorf("%s feeds bare github.sha as a source commit; on workflow_run that is the default-branch tip, not the release", publicationWorkflowFile)
 	}
-	if !strings.Contains(body, "HEAD_SHA: ${{ steps.source.outputs.source-commit }}") {
+	if !strings.Contains(body, "HEAD_SHA: ${{ steps.source.outputs.pin }}") {
 		t.Errorf("%s does not feed the resolved source-commit to the build steps", publicationWorkflowFile)
 	}
 	// (b) The checkout is verified against the release identity: the

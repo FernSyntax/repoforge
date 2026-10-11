@@ -50,7 +50,7 @@ expression.
    checked out: the tag must exist as a release, its ref must be an
    annotated tag object (a lightweight tag is refused), and the tag
    object must dereference to a commit SHA. The checkout is pinned to
-   that resolved commit as data (`ref: ${{ steps.source.outputs.source-commit }}`),
+   that resolved commit as data (`ref: ${{ steps.source.outputs.pin }}`),
    never as an event expression. Resolved data carries the same value
    without the shape both scanners flag.
 3. The checkout is verified against the identity, not merely asserted:

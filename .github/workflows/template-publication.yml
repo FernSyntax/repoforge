@@ -89,7 +89,7 @@ jobs:
       TARGET: FernSyntax/repoforge-template
     outputs:
       tag: ${{ steps.source.outputs.tag }}
-      source-commit: ${{ steps.source.outputs.source-commit }}
+      pin: ${{ steps.source.outputs.pin }}
       manifest-digest: ${{ steps.build.outputs.manifest-digest }}
     steps:
       # -----------------------------------------------------------------
@@ -169,7 +169,7 @@ jobs:
           esac
           {
             echo "tag=$tag"
-            echo "source-commit=$commit"
+            echo "pin=$commit"
           } >> "$GITHUB_OUTPUT"
           echo "resolved $tag -> commit $commit"
 
@@ -183,7 +183,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-          ref: ${{ steps.source.outputs.source-commit }}
+          ref: ${{ steps.source.outputs.pin }}
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -200,7 +200,7 @@ jobs:
       - name: Verify the checkout against the release identity
         env:
           TAG: ${{ steps.source.outputs.tag }}
-          PIN: ${{ steps.source.outputs.source-commit }}
+          PIN: ${{ steps.source.outputs.pin }}
         run: |
           set -euo pipefail
           tag="$TAG"
@@ -249,7 +249,7 @@ jobs:
         id: build
         env:
           TAG: ${{ steps.source.outputs.tag }}
-          HEAD_SHA: ${{ steps.source.outputs.source-commit }}
+          HEAD_SHA: ${{ steps.source.outputs.pin }}
         run: |
           scripts/build-template .template-out \
             --repoforge-version "$TAG" \
@@ -303,7 +303,7 @@ jobs:
       # The single allowed destination. Not an input.
       TARGET: FernSyntax/repoforge-template
       TAG: ${{ needs.build.outputs.tag }}
-      HEAD_SHA: ${{ needs.build.outputs.source-commit }}
+      HEAD_SHA: ${{ needs.build.outputs.pin }}
       DIGEST: ${{ needs.build.outputs.manifest-digest }}
     steps:
       # Trusted code only. This job holds the App private key, so the
@@ -510,7 +510,7 @@ jobs:
         env:
           APP_TOKEN: ${{ steps.app.outputs.token }}
           TAG: ${{ needs.build.outputs.tag }}
-          HEAD_SHA: ${{ needs.build.outputs.source-commit }}
+          HEAD_SHA: ${{ needs.build.outputs.pin }}
         # shellcheck disable=SC2155 # RUNNER_TEMP is always set by GitHub Actions
         run: |
           set -euo pipefail
@@ -596,7 +596,7 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           TAG: v0.1.0
           SOURCE_TAG: ${{ needs.build.outputs.tag }}
-          HEAD_SHA: ${{ needs.build.outputs.source-commit }}
+          HEAD_SHA: ${{ needs.build.outputs.pin }}
         run: |
           set -euo pipefail
           root=""
@@ -702,7 +702,7 @@ jobs:
         env:
           APP_TOKEN: ${{ steps.app.outputs.token }}
           TAG: ${{ needs.build.outputs.tag }}
-          HEAD_SHA: ${{ needs.build.outputs.source-commit }}
+          HEAD_SHA: ${{ needs.build.outputs.pin }}
           DIGEST: ${{ needs.build.outputs.manifest-digest }}
         # shellcheck disable=SC2155 # RUNNER_TEMP is always set by GitHub Actions
         run: |
