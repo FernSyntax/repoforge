@@ -214,6 +214,53 @@ case-insensitively. No CI check constrains issue bodies; this command
 is guidance with teeth, not a new contract. Exit `0` ready ·
 `1` not ready · `2` usage error.
 
+## repoforge pr create
+
+```
+repoforge pr create --title T --file PATH [--path DIR] [--repo owner/name] [--base BRANCH] [--draft]
+```
+
+Gates exactly like `pr ready`, then delegates to `gh pr create`. The
+network call is structurally after the gate: a red gate never reaches
+GitHub. The title must follow commit conventions (it becomes the
+squash-merge subject) and is validated locally. Authentication stays
+in `gh`; a missing or unauthenticated `gh` fails with its own message.
+Creation targets the checkout's repository. Exit `0` created ·
+`1` gate red or `gh` failed · `2` usage error.
+
+## repoforge issue create
+
+```
+repoforge issue create --type bug|feature|task|security --title T --file PATH [--path DIR] [--repo owner/name]
+```
+
+Validates the drafted body against the form, then delegates to
+`gh issue create` with the form's declared labels attached, so
+automation files under the same labels a web-filed issue would get.
+Exit `0` created · `1` gate red or `gh` failed · `2` usage error.
+
+## repoforge release ready
+
+```
+repoforge release ready --tag vX.Y.Z [--path DIR]
+```
+
+Runs `scripts/release-check.sh` as the pre-tag gate: shape,
+annotation, ancestry, changelog, version stamp. Performs no tagging,
+pushing, or publishing — the firing action stays human. Exit `0`
+ready · non-zero the script's verdict · `2` usage error.
+
+## repoforge hook install|verify|uninstall
+
+```
+repoforge hook install|verify|uninstall [--path DIR]
+```
+
+The CLI entry point over `scripts/hooks-install`, discovered from the
+repository root. Installs nothing itself: the pre-commit framework
+still owns the blocking hooks, and hooks the installer does not own
+are still never replaced. See `docs/development/git-hooks.md`.
+
 ## repoforge version
 
 Prints the build version (stamped at release time, spec.md §14.3).

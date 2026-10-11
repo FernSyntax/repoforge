@@ -38,10 +38,14 @@ CI is authoritative; these are local feedback only.
   checks, no self-approving, no amending published history.
 - Before opening a pull request, scaffold its body with
   `repoforge pr scaffold --issue N` and do not open it until
-  `repoforge pr ready --file <body> [--repo owner/name]` reports OK.
-  The same applies to issues via `repoforge issue scaffold` and
-  `repoforge issue check`. A red CI check you could have run locally
-  is an authoring failure, not a CI failure.
+  `repoforge pr ready --file <body> [--repo owner/name]` reports OK —
+  or create it through `repoforge pr create`, which gates first and
+  delegates to `gh` only on green. The same applies to issues via
+  `repoforge issue scaffold` / `repoforge issue check` / `repoforge
+  issue create`. Install the blocking hooks with `repoforge hook
+  install`; gate a release tag with `repoforge release ready --tag`.
+  A red CI check you could have run locally is an authoring failure,
+  not a CI failure.
 - Stop when the requested scope is complete. Report what changed and
   how it was verified.
 

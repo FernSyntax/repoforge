@@ -27,8 +27,9 @@ type IssueField struct {
 // a form the scaffold does not understand fails loudly at scaffold
 // time instead of emitting a body that can never validate.
 type issueForm struct {
-	Name string `yaml:"name"`
-	Body []struct {
+	Name   string   `yaml:"name"`
+	Labels []string `yaml:"labels"`
+	Body   []struct {
 		Type  string `yaml:"type"`
 		ID    string `yaml:"id"`
 		Attrs struct {
@@ -98,6 +99,21 @@ func LoadIssueFields(root, typ string) (formName string, fields []IssueField, er
 		return "", nil, fmt.Errorf("the %q issue form declares no required fields", typ)
 	}
 	return form.Name, fields, nil
+}
+
+// IssueFormLabels returns the labels an issue form declares, so
+// automation files under the same labels a human filing through the
+// web form would get. An empty list means the form declares none.
+func IssueFormLabels(root, typ string) ([]string, error) {
+	data, err := os.ReadFile(filepath.Join(root, ".github", "ISSUE_TEMPLATE", typ+".yml"))
+	if err != nil {
+		return nil, fmt.Errorf("reading the %q issue form: %w", typ, err)
+	}
+	var form issueForm
+	if err := yaml.Unmarshal(data, &form); err != nil {
+		return nil, fmt.Errorf("parsing the %q issue form: %w", typ, err)
+	}
+	return form.Labels, nil
 }
 
 // RenderIssueScaffold prints the issue skeleton: one heading per

@@ -12,6 +12,16 @@ history: there is no earlier version of *this* product to record.
 
 ### Added
 
+- **Enforced local gates and thin `gh` wrappers.** `repoforge hook
+  install|verify|uninstall` is the CLI entry point over the hook
+  installer; `repoforge pr create` and `repoforge issue create` run
+  the full local gate before delegating to `gh` (a red gate never
+  reaches the network; the form's labels are applied on issue
+  creation); `repoforge release ready --tag` is the side-effect-free
+  pre-tag gate. See ADR-0012.
+
+### Added
+
 - **Agent-proof contribution gates.** `repoforge pr scaffold --issue N`
   prints the pull request body skeleton with every traceability
   section and the issue link pre-placed; `repoforge pr ready --file`

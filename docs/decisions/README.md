@@ -18,7 +18,8 @@ normative from the moment it merges.
 | [0008](0008-template-publication-and-authentication.md) | Template publication with a dedicated GitHub App | accepted | §13.8, §18.4 |
 | [0009](0009-release-engineering-and-supply-chain.md) | Release engineering and supply-chain guarantees | accepted | §14, §18.3 |
 | [0010](0010-documentation-and-wiki-strategy.md) | Documentation and wiki strategy | accepted | §13.9, §20.6 |
-| [0011](0011-agent-proof-pr-and-issue-gates.md) | Agent-proof pull request and issue gates | accepted | §20.2, §20.3 |
+| [0011](0011-agent-proof-pr-and-issue-gates.md) | Agent-proof pull request and issue gates | amended by 0012 | §20.2, §20.3 |
+| [0012](0012-enforced-gates-and-gh-wrappers.md) | Enforced local gates and thin gh wrappers | accepted | P9, §6.8, §14, §20 |
 
 `spec.md` in each link is the root specification.
 

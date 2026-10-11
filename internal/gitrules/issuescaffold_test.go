@@ -142,3 +142,25 @@ func TestCheckIssueBodyNamesTheMissingField(t *testing.T) {
 		t.Errorf("the failure does not name the missing field %q: %s", fields[1].Label, joinMessages(issues))
 	}
 }
+
+// TestIssueFormLabelsTracksTheForm proves automation files under the
+// same labels a web-filed issue would get.
+func TestIssueFormLabelsTracksTheForm(t *testing.T) {
+	root := repoFormsRoot(t)
+	labels, err := IssueFormLabels(root, "bug")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, l := range labels {
+		if l == "bug" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the bug form's label was not loaded (got %q)", labels)
+	}
+	if _, err := IssueFormLabels(root, "nope"); err == nil {
+		t.Errorf("labels for an unknown type must fail")
+	}
+}
