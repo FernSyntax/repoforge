@@ -4,6 +4,13 @@
 # rulesets exist (Pro/Team/Enterprise) or a public repository. Layers onto
 # configs/github/repository.yaml.
 #
+# This profile is maximal by the OpenSSF Scorecard Branch-Protection
+# criterion: at least one approval, stale-review dismissal, code-owner
+# review, and last-push approval are all required. A repository with a
+# single maintainer cannot satisfy it — a pull request author cannot
+# approve their own change — so the solo profile exists and scores below
+# maximal by design.
+#
 # Compatibility notes:
 # - require_code_owner_review needs a valid CODEOWNERS file; CODEOWNERS on
 #   private repositories requires Pro or higher.
@@ -38,7 +45,7 @@ rulesets:
       pull_request:
         required_approvals: 1
         dismiss_stale_reviews: true
-        require_last_push_approval: false
+        require_last_push_approval: true
         require_conversation_resolution: true
         require_code_owner_review: true
       required_status_checks:

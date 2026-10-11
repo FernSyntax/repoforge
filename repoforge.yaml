@@ -6,7 +6,7 @@ standard:
   version: "v1"
 
 repository:
-  governance_profile: "solo"
+  governance_profile: "team"
   visibility: "public"
   default_branch: "main"
 

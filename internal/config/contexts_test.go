@@ -41,3 +41,43 @@ func TestDiscoverCheckContextsMissingDir(t *testing.T) {
 		t.Errorf("contexts = %v, want empty for missing workflows dir", got)
 	}
 }
+
+func TestCodeScanningCheckContexts(t *testing.T) {
+	t.Run("go module and workflows", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		writeWorkflow(t, dir, "ci.yml", "on: [push]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n")
+		got := CodeScanningCheckContexts(dir)
+		want := "Analyze (actions),Analyze (go)"
+		if strings.Join(got, ",") != want {
+			t.Errorf("contexts = %v, want %s (sorted)", got, want)
+		}
+	})
+	t.Run("workflows without a module", func(t *testing.T) {
+		dir := t.TempDir()
+		writeWorkflow(t, dir, "ci.yaml", "on: [push]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n")
+		got := CodeScanningCheckContexts(dir)
+		if strings.Join(got, ",") != "Analyze (actions)" {
+			t.Errorf("contexts = %v, want [Analyze (actions)]", got)
+		}
+	})
+	t.Run("neither", func(t *testing.T) {
+		if got := CodeScanningCheckContexts(t.TempDir()); len(got) != 0 {
+			t.Errorf("contexts = %v, want empty", got)
+		}
+	})
+	t.Run("workflows dir exists but holds no workflow files", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".github", "workflows", "README.md"), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := CodeScanningCheckContexts(dir); len(got) != 0 {
+			t.Errorf("contexts = %v, want empty when no workflow files exist", got)
+		}
+	})
+}
