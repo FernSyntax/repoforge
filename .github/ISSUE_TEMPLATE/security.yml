@@ -1,6 +1,6 @@
 name: Security report
 description: Non-exploitable security concerns only — use the private path for anything actionable
-labels: ["security"]
+labels: ["type:security"]
 body:
   - type: markdown
     attributes:

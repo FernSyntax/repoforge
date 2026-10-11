@@ -50,13 +50,22 @@ alone. Re-running it is safe and reports zero changes.
 
 ## 4. Work the standard way
 
+Every step is gated — scaffolds emit the exact contract, gates prove
+it locally, creation delegates only on green. Raw `--body` flags skip
+every gate and fail CI.
+
 ```sh
-gh issue create --title "Add search" --body "What/why."
-git checkout -b feat/1-add-search
+repoforge hook install   # once per clone: blocking commit/push gates
+repoforge issue scaffold --type feature > /tmp/search.md
+# ... fill every required field ...
+repoforge issue create --type feature --title "Add search" --file /tmp/search.md
+git checkout -b feat/1-add-search   # number from the created issue
 # ... work ...
-git add . && git commit -m "feat(search): add query parser"
-git push -u origin feat/1-add-search
-gh pr create --title "feat(search): add query parser" --body "Closes #1."
+git add . && git commit -m "feat(search): add query parser"   # commit-msg hook checks
+git push -u origin feat/1-add-search   # pre-push runs scripts/verify full
+repoforge pr scaffold --issue 1 > /tmp/pr.md
+# ... fill every section ...
+repoforge pr create --title "feat(search): add query parser" --file /tmp/pr.md
 gh pr checks --watch   # all green, then squash-merge
 ```
 

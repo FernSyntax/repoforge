@@ -153,12 +153,12 @@ func TestIssueFormLabelsTracksTheForm(t *testing.T) {
 	}
 	found := false
 	for _, l := range labels {
-		if l == "bug" {
+		if l == "type:bug" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("the bug form's label was not loaded (got %q)", labels)
+		t.Errorf("the bug form's canonical label was not loaded (got %q)", labels)
 	}
 	if _, err := IssueFormLabels(root, "nope"); err == nil {
 		t.Errorf("labels for an unknown type must fail")
