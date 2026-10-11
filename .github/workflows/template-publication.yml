@@ -32,9 +32,26 @@ on:
 
 permissions: {}
 
+# Concurrency is keyed on the SOURCE RELEASE identity, never on the
+# branch ref. For `workflow_run`, `github.ref` is the default branch, so
+# the old `workflow`-plus-`ref` key put every release tag in one group:
+# pushing v0.2.0 while v0.1.0 was still publishing cancelled v0.1.0
+# midway through a remote write. `head_branch` on a tag-triggered
+# `workflow_run` is the tag itself, which is immutable; manual dispatch
+# names the tag directly. Either way, two different source releases get
+# different groups and never cancel each other, while duplicate runs for
+# the SAME release share a group and queue behind the active one.
+#
+# `cancel-in-progress` is false deliberately: killing a run between
+# "push root commit" and "publish release" leaves a partially
+# initialized template. The publication steps are idempotent (routine
+# updates no-op when synchronized; initial publication refuses a
+# non-empty target), so a queued duplicate is safe and a cancelled
+# in-flight run is not. See "Recovering an interrupted publication" in
+# docs/operations/template-publication.md.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: template-publication-${{ github.event.workflow_run.head_branch || inputs.tag }}
+  cancel-in-progress: false
 
 jobs:
   publish:
@@ -55,11 +72,23 @@ jobs:
       source-commit: ${{ steps.target.outputs.source-commit }}
       manifest-digest: ${{ steps.target.outputs.manifest-digest }}
     steps:
+      # The checkout is pinned to the release identity, not the default
+      # branch. For `workflow_run`, `head_sha` is the exact commit the
+      # successful Release run built; for manual dispatch, the tag is
+      # resolved to its commit by the next step and anything that does
+      # not match is rejected before any credential exists. Without this,
+      # a commit landing on main after the tag would silently become the
+      # published source.
+      #
+      # Trusted ref note: in both trigger modes GitHub runs THIS workflow
+      # file from the default branch, never from the tag. The tag only
+      # ever supplies data (the commit to build), never code.
       - name: Checkout the tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha || inputs.tag }}
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -92,7 +121,6 @@ jobs:
 
           {
             echo "tag=$tag"
-            echo "source-commit=$(git rev-parse HEAD)"
           } >> "$GITHUB_OUTPUT"
 
           # The release must already exist: manual dispatch publishes an
@@ -117,8 +145,7 @@ jobs:
           # The tag object is the authoritative reference, and it is
           # already in the checkout because the workflow was triggered
           # by it.
-          if ! commit=$(git rev-parse --verify --quiet "$tag^{commit}"); then
-            # Fall back to the API when the tag is not in the local
+          if ! commit=$(git rev-parse --verify --quiet "$tag^{commit}"); then            # Fall back to the API when the tag is not in the local
             # checkout, dereferencing an annotated tag object explicitly:
             # the ref points at the tag object, which points at the commit.
             ref_type=$(gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" --jq '.object.type' 2>/dev/null || echo "")
@@ -145,6 +172,23 @@ jobs:
             exit 1
           fi
           echo "same-SHA: the release targets this exact commit"
+
+          # Pin the working tree to the resolved commit and record it as
+          # the single source of truth for every later step. The checkout
+          # above already requested the right ref, but if main advanced
+          # between the trigger and this run — or a manual dispatch named
+          # a tag whose commit is not what got checked out — building
+          # from HEAD would silently publish the wrong source. Detaching
+          # here makes that impossible: everything downstream reads
+          # `source-commit`, never HEAD, never the branch tip.
+          git checkout --quiet --detach "$commit"
+          pinned=$(git rev-parse HEAD)
+          if [ "$pinned" != "$commit" ]; then
+            echo "::error::could not pin the working tree to $commit (at $pinned)" >&2
+            exit 1
+          fi
+          echo "source-commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "tag $tag, commit $commit, version $tag, engine release $tag: all agree"
 
       # -----------------------------------------------------------------
       # Stage 1 — trusted verification on the tagged source, before any
@@ -174,7 +218,7 @@ jobs:
         id: build
         env:
           TAG: ${{ steps.source.outputs.tag }}
-          HEAD_SHA: ${{ github.sha }}
+          HEAD_SHA: ${{ steps.source.outputs.source-commit }}
         run: |
           scripts/build-template .template-out \
             --repoforge-version "$TAG" \
@@ -359,7 +403,7 @@ jobs:
         env:
           APP_TOKEN: ${{ steps.app.outputs.token }}
           TAG: ${{ steps.source.outputs.tag }}
-          HEAD_SHA: ${{ github.sha }}
+          HEAD_SHA: ${{ steps.source.outputs.source-commit }}
         # shellcheck disable=SC2155 # RUNNER_TEMP is always set by GitHub Actions
         run: |
           set -euo pipefail
@@ -446,7 +490,7 @@ jobs:
           TAG: v0.1.0
           SOURCE_TAG: ${{ steps.source.outputs.tag }}
           SOURCE_SHA: ${{ steps.source.outputs.tag }}
-          HEAD_SHA: ${{ github.sha }}
+          HEAD_SHA: ${{ steps.source.outputs.source-commit }}
         run: |
           set -euo pipefail
           root=""
@@ -552,7 +596,7 @@ jobs:
         env:
           APP_TOKEN: ${{ steps.app.outputs.token }}
           TAG: ${{ steps.source.outputs.tag }}
-          HEAD_SHA: ${{ github.sha }}
+          HEAD_SHA: ${{ steps.source.outputs.source-commit }}
           DIGEST: ${{ steps.build.outputs.manifest-digest }}
         # shellcheck disable=SC2155 # RUNNER_TEMP is always set by GitHub Actions
         run: |

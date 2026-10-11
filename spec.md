@@ -634,7 +634,7 @@ write and fails closed on mismatch.
 | FR-017 | `wiki sync` distinguishes a missing wiki from an auth failure | ENFORCED | internal/wiki | wiki_test.go |
 | FR-018 | `pr check` enforces branch and message policy locally | ENFORCED | internal/gitrules | gitrules_test.go |
 | FR-019 | Pull requests state their linked issue and required sections | ENFORCED | CI, internal/gitrules | prcheck_test.go |
-| FR-020 | Release tags are strict SemVer, annotated, and changelogged | ENFORCED | scripts/release-check.sh | release validation workflow |
+| FR-020 | Release tags are strict SemVer, annotated, changelogged, and on mainline history | ENFORCED | scripts/release-check.sh | release validation workflow |
 | FR-021 | Release artifacts carry checksums, an SBOM, and provenance | ENFORCED | .goreleaser.yaml, release.yml | release.yml `validate` job, `scripts/release-check.sh` |
 | FR-022 | The tracked tree carries no legacy product branding | ENFORCED | internal/brand | brand_test.go, validate_test.go |
 | FR-023 | Generated output carries no engine implementation source | ENFORCED | internal/template | template_test.go |

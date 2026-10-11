@@ -11,8 +11,8 @@
 #          This is the default and the pre-commit hook's blocking set.
 #   full   Everything in fast, plus race detection, schema-pair parity,
 #          a fresh template build (scripts/build-template) and its
-#          reproducibility proof (scripts/verify-template), and — when
-#          installed — workflow and shell linting. This mirrors CI.
+#          reproducibility proof (scripts/verify-template), and workflow
+#          and shell linting. This mirrors CI.
 #
 # Flags:
 #   --with-act          Also emulate the safe pull_request and validation
@@ -32,6 +32,9 @@
 #   - Fails on the first failing check and propagates its exit code.
 #   - Never reports success after a failed check.
 #   - Detects missing tools and names the install instructions.
+#   - Never skips a check silently: a missing required tool fails the
+#     run, exactly like a failed check. A green run means every check
+#     ran and passed.
 #   - Resolves the repository root, so it works from any directory.
 #   - Makes no network access at fast or full; only the opt-ins do.
 #
@@ -126,10 +129,6 @@ need() {
 	exit 2
 }
 
-skip() {
-	echo "verify: SKIPPED — $1 is not installed ($2); install: $3"
-}
-
 step "repository root: $root"
 step "verification level: $LEVEL"
 
@@ -198,26 +197,18 @@ if [ "$LEVEL" = full ]; then
 	step "module integrity"
 	run go mod verify
 
-	if command -v shellcheck >/dev/null 2>&1; then
-		step "shell lint"
-		run shellcheck scripts/*.sh scripts/verify scripts/build-template \
-			scripts/verify-template scripts/check-schema-parity \
-			scripts/check-issue-forms scripts/hooks-install \
-			scripts/release-check.sh scripts/hooks/commit-msg \
-			scripts/hooks/need-tool scripts/hooks/only-generated-files \
-			scripts/hooks/pre-push
-	else
-		skip shellcheck "not installed" \
-			"apt install shellcheck, or https://github.com/koalaman/shellcheck"
-	fi
+	step "shell lint"
+	need shellcheck "apt install shellcheck 0.11.0 to match CI, or https://github.com/koalaman/shellcheck"
+	run shellcheck scripts/*.sh scripts/verify scripts/build-template \
+		scripts/verify-template scripts/check-schema-parity \
+		scripts/check-issue-forms scripts/hooks-install \
+		scripts/release-check.sh scripts/hooks/commit-msg \
+		scripts/hooks/need-tool scripts/hooks/only-generated-files \
+		scripts/hooks/pre-push
 
-	if command -v actionlint >/dev/null 2>&1; then
-		step "workflow lint"
-		run actionlint .github/workflows/*.yml
-	else
-		skip actionlint "not installed" \
-			"https://github.com/rhysd/actionlint#installation (CI pins 1.7.12)"
-	fi
+	step "workflow lint"
+	need actionlint "install actionlint 1.7.12 to match CI: https://github.com/rhysd/actionlint#installation"
+	run actionlint .github/workflows/*.yml
 fi
 
 # --- opt-ins ----------------------------------------------------------------

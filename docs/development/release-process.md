@@ -68,12 +68,16 @@ does (spec.md §14.6).
 2. **Tag.** Create the annotated tag on the merge commit:
 
    ```sh
-   scripts/release-check.sh vX.Y.Z   # shape, annotation, changelog, version stamp
+   scripts/release-check.sh vX.Y.Z   # shape, annotation, ancestry, changelog, version stamp
    git tag -a vX.Y.Z -m "vX.Y.Z"
    git push origin vX.Y.Z
    ```
 
-   Pushing the tag is the single firing action.
+   Pushing the tag is the single firing action. The check proves the
+   tag commit is reachable from protected `main` history
+   (`git merge-base --is-ancestor`), so a tag on an unmerged branch can
+   never become a release; it fails closed on shallow clones that cannot
+   prove ancestry either way.
 3. **Automated, on the tag.**
    - `Release Validation` re-runs `scripts/release-check.sh` against
      the tagged commit and must pass before anything is published.

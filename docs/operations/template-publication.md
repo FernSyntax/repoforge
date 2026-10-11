@@ -201,12 +201,70 @@ For a later RepoForge release:
 
 `main` is never written directly on this path.
 
+## Manual dispatch: kept, but constrained
+
+The `workflow_dispatch` input exists for one purpose: re-running a
+publication that failed after its release already succeeded, without
+re-running (and re-publishing) the release itself. It is not a way to
+publish an arbitrary ref, and reviewing that question is what keeps it:
+
+- The input must name an existing release tag in strict SemVer form;
+  anything else is rejected before any credential is minted.
+- The tag must be an annotated tag object resolving to the exact
+  commit checked out, and the engine release for that tag must exist.
+  A branch, a lightweight tag, or a commit the release does not target
+  is refused.
+- The publishing destination stays fixed at
+  `FernSyntax/repoforge-template` regardless of input; no input can
+  broaden it.
+- In both trigger modes the workflow file that runs comes from the
+  engine's default branch — never from the tag — so a tag supplies
+  data (the commit to build) but never code.
+
+The dedicated preflight (`Template Preflight` workflow) remains the
+safer first step whenever the App, its installation, or its permissions
+are in doubt: it mints a token and proves the scope without publishing
+anything. Manual dispatch is for retrying a vetted release, not for
+exploring an unvetted one.
+
 ## Idempotency
 
 Re-running a publication for an already-applied source version is a
 no-op: the diff against the target is empty, so the workflow reports
 that the target is synchronized and creates no commit, no PR, no tag,
 and no release.
+
+## Recovering an interrupted publication
+
+The concurrency group is keyed on the source release identity
+(`template-publication-<tag>`), and `cancel-in-progress` is false, so
+an active publication is never killed by a later run for a different
+release. If a run nevertheless stops midway — runner failure, API
+outage, revoked token — the recovery is always the same: **re-run the
+publication for the same tag**. Do not repair by hand.
+
+Why re-running is safe at every stage:
+
+- Before any write, all verification is read-only (tag resolution,
+  destination checks, build, provenance proof), so an interruption
+  there leaves nothing behind.
+- If the root commit landed but the tag did not, the next run sees a
+  non-empty target, takes the routine path, and opens a PR that
+  contains exactly the generated tree. Review it, merge it, and the
+  template converges without a second root commit.
+- Tags and releases are created only after the template's own CI is
+  green on the published commit, and the final state check verifies
+  one commit, one tag, and one release. A run that fails there has
+  published nothing irreversible.
+- API errors always fail the run. They are never converted into empty
+  state or a silent skip: a 409 on an empty repository counts as zero
+  commits, and anything else exits non-zero with the endpoint named.
+
+What never helps: force-pushing the template, deleting the tag to
+"retry cleanly", or editing the template by hand. All three destroy the
+evidence the next run needs to converge safely. If the target is in a
+state no documented path covers, open an issue and follow the
+break-glass procedure below.
 
 ## Break-glass manual repair
 
@@ -282,3 +340,25 @@ Until these are applied, the template repository is **not** protected —
 say so, do not claim otherwise. The engine repository's protection is
 converged by `repoforge bootstrap` from `repoforge.yaml` and can be
 asserted; the template's cannot.
+
+### Verified live state
+
+Verified 2026-10-11 via the authenticated session against
+`FernSyntax/repoforge-template`:
+
+- `repoforge:main` (branch, active): PR-only with 0 required approvals
+  (no independent approval a single maintainer cannot supply), squash
+  merges only, `required_status_checks` for exactly `verify`,
+  `repoforge`, and `provenance` — the three checks the template's CI
+  actually emits — plus linear history, non-fast-forward, and deletion
+  protection. Bypass actors: none, including the publication bot.
+- `repoforge:release-tags` (tag, active): `deletion` and `update` rules,
+  so release tags are immutable.
+- `is_template: true`.
+
+The contract above is pinned by
+`TestTemplateBranchProtectionContract` and
+`TestTemplateTagRulesetIsImmutable` against the canonical ruleset files
+and the template CI job names. If the live repository ever diverges
+from this section, the section — not the repository — is what must
+change first, through a reviewed PR.

@@ -21,20 +21,66 @@ runs:
         } >> "$GITHUB_OUTPUT"
     - name: Fetch that commit and build
       shell: bash
+      # Inputs arrive strictly as data through the environment, never
+      # interpolated into shell. An earlier version embedded
+      # `${{ inputs.url }}` and `${{ inputs.commit }}` directly in the
+      # `git remote add` and `fetch` lines, where a crafted value is one
+      # metacharacter away from command execution. The allowlist below
+      # makes injection structurally impossible — but quoting is kept
+      # anyway, because validation and quoting defend different layers.
+      env:
+        ENGINE_SOURCE_URL: ${{ inputs.url }}
+        ENGINE_SOURCE_COMMIT: ${{ inputs.commit }}
       run: |
         set -euo pipefail
+        # Only the canonical engine repository, with an optional single
+        # `.git` suffix handled explicitly. Anything else — a different
+        # host, an SSH URL, a file path, an empty value — is refused
+        # before git ever sees it.
+        url="$ENGINE_SOURCE_URL"
+        case "$url" in
+          https://github.com/FernSyntax/repoforge)
+            ;;
+          https://github.com/FernSyntax/repoforge.git)
+            url="https://github.com/FernSyntax/repoforge"
+            ;;
+          *)
+            echo "::error::refusing unexpected engine source URL (want https://github.com/FernSyntax/repoforge)" >&2
+            exit 1
+            ;;
+        esac
+        # Exactly 40 lowercase hex characters: the shape of a full commit
+        # SHA. Anything shorter, longer, empty, or non-hex is refused
+        # before it can reach the command line.
+        case "$ENGINE_SOURCE_COMMIT" in
+          ????????????????????????????????????????)
+            case "$ENGINE_SOURCE_COMMIT" in
+              *[!0-9a-f]*)
+                echo "::error::refusing non-hex engine source commit" >&2
+                exit 1
+                ;;
+            esac
+            ;;
+          *)
+            echo "::error::refusing engine source commit that is not a 40-character hex SHA" >&2
+            exit 1
+            ;;
+        esac
+        # The fetch uses the validated URL with no credential of any kind:
+        # the engine source is public, and no token, header, or
+        # credential helper is configured here, so nothing secret can
+        # leak into git configuration, a remote URL, or an argument.
+        # Failures surface git's own error; the values echoed are the
+        # validated public URL and commit only.
         src="$RUNNER_TEMP/engine-src"
         rm -rf "$src"
         git init --quiet "$src"
-        git -C "$src" remote add origin "${{ inputs.url }}"
-        git -C "$src" fetch --quiet --depth 1 origin "${{ inputs.commit }}"
+        git -C "$src" remote add origin "$url"
+        git -C "$src" fetch --quiet --depth 1 origin "$ENGINE_SOURCE_COMMIT"
         git -C "$src" checkout --quiet --detach FETCH_HEAD
         go build -C "$src" -o "$RUNNER_TEMP/repoforge" ./cmd/repoforge
         chmod +x "$RUNNER_TEMP/repoforge"
         "$RUNNER_TEMP/repoforge" version
-      env:
-        url: ${{ inputs.url }}
-        commit: ${{ inputs.commit }}
 
 inputs:
   url:
