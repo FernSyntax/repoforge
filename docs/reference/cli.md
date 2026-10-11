@@ -167,6 +167,53 @@ Local, GitHub-free PR pre-flight: on a well-named topic branch (not
 commit message valid, working tree clean. Exit `0` ready ·
 `1` not ready · `2` error.
 
+## repoforge pr scaffold
+
+```
+repoforge pr scaffold --issue N
+```
+
+Prints the pull request body skeleton for the issue: every section the
+traceability contract requires, with `Closes #N` pre-placed in Why.
+Fill prompts are HTML comments, which validation strips, so the
+skeleton alone does not validate — fill every section, then prove it
+with `pr ready`.
+
+## repoforge pr ready
+
+```
+repoforge pr ready --file PATH [--path DIR] [--repo owner/name]
+```
+
+The single local gate before opening a pull request: branch readiness
+(`pr check`) plus the body contract (`pr check-body`). Exit `0` means
+every deterministic check CI runs will pass; anything else names
+exactly what is red. With `--repo`, and when a credential resolves, it
+also confirms the referenced issue exists.
+
+## repoforge issue scaffold
+
+```
+repoforge issue scaffold --type bug|feature|task|security [--path DIR]
+```
+
+Prints the skeleton for an issue form: one `### <label>` heading per
+required field, derived from `.github/ISSUE_TEMPLATE/<type>.yml`.
+Fill prompts are HTML comments, so the skeleton alone does not
+validate — fill every field, then prove it with `issue check`.
+
+## repoforge issue check
+
+```
+repoforge issue check --type bug|feature|task|security --file PATH [--path DIR]
+```
+
+Validates a drafted issue body against the form's required fields:
+every required `### <label>` present and non-empty, matched
+case-insensitively. No CI check constrains issue bodies; this command
+is guidance with teeth, not a new contract. Exit `0` ready ·
+`1` not ready · `2` usage error.
+
 ## repoforge version
 
 Prints the build version (stamped at release time, spec.md §14.3).
@@ -348,7 +395,7 @@ body so they are visible in the diff: `dependency-pull-request` and
 label.
 
 Exit `0` ready · `1` not ready or the linked issue does not exist ·
-`2` usage error.
+`2` usage error (missing `--file`, unreadable body).
 
 ## repoforge version
 

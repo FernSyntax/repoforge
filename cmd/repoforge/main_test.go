@@ -421,3 +421,143 @@ func TestPRCheckBodyFlagsReachTheirOwnSubcommand(t *testing.T) {
 		t.Errorf("pr check must not be a usage error:\n%s", stderr.String())
 	}
 }
+
+// TestPRScaffoldHandsTheAgentTheContract proves the scaffold path end
+// to end: --issue is mandatory, and the emitted skeleton carries every
+// section plus the link, so an agent starting here cannot miss the
+// template the way PR #4 did.
+func TestPRScaffoldHandsTheAgentTheContract(t *testing.T) {
+	var stdout, stderr strings.Builder
+	if code := run([]string{"pr", "scaffold"}, &stdout, &stderr); code != 2 {
+		t.Errorf("exit = %d, want 2 (a scaffold without --issue is a usage error)", code)
+	}
+	stdout.Reset()
+	if code := run([]string{"pr", "scaffold", "--issue", "3"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d, want 0:\n%s\n%s", code, stdout.String(), stderr.String())
+	}
+	for _, want := range []string{"## What Changed", "## Why", "## Known Limitations", "Closes #3"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("scaffold does not contain %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
+// TestIssueScaffoldAndCheckRoundtrip proves the issue loop from the
+// command surface: the chooser is rejected, the raw scaffold fails,
+// and the filled scaffold passes.
+func TestIssueScaffoldAndCheckRoundtrip(t *testing.T) {
+	chdir(t, repoRoot(t))
+
+	var stdout, stderr strings.Builder
+	if code := run([]string{"issue", "scaffold", "--type", "config"}, &stdout, &stderr); code != 1 {
+		t.Errorf("exit = %d, want 1 (the template chooser is not an issue type)", code)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"issue", "scaffold", "--type", "bug"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d, want 0:\n%s\n%s", code, stdout.String(), stderr.String())
+	}
+	dir := t.TempDir()
+	raw := filepath.Join(dir, "raw.md")
+	if err := os.WriteFile(raw, []byte(stdout.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	if code := run([]string{"issue", "check", "--type", "bug", "--file", raw}, &stdout, &stderr); code != 1 {
+		t.Errorf("exit = %d, want 1 (an unfilled scaffold must fail)", code)
+	}
+	body := strings.ReplaceAll(
+		strings.ReplaceAll(
+			readTestFile(t, raw),
+			"<!-- Fill this in; an empty answer fails validation -->", "answered"),
+		"<!-- Pick exactly one of the form's options: safety: the tool mutated or deleted something it must not / security: a credential, permission, or protection boundary is involved / correctness: wrong result, no data loss / usability: confusing output or message -->",
+		"correctness: wrong result, no data loss")
+	done := filepath.Join(dir, "done.md")
+	if err := os.WriteFile(done, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	if code := run([]string{"issue", "check", "--type", "bug", "--file", done}, &stdout, &stderr); code != 0 {
+		t.Errorf("exit = %d, want 0 (a filled body must pass):\n%s\n%s", code, stdout.String(), stderr.String())
+	}
+}
+
+func readTestFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+// TestPRReadyGatesTheFullLoop proves the gate agents must pass: a
+// topic branch with a conventional commit and a filled scaffold body
+// reports OK, and the same branch with the raw scaffold reports not
+// ready. Green here is what CI's deterministic checks will see.
+func TestPRReadyGatesTheFullLoop(t *testing.T) {
+	dir := t.TempDir()
+	// Body drafts live outside the repository: the clean-tree rule
+	// counts staged-but-uncommitted files as uncommitted.
+	paper := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid",
+			"GIT_CONFIG_NOSYSTEM=1", "HOME="+t.TempDir(),
+			"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=commit.gpgsign", "GIT_CONFIG_VALUE_0=false")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "--quiet", "-b", "main", ".")
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "chore: base")
+	git("checkout", "--quiet", "-b", "fix/7-thing")
+	if err := os.WriteFile(filepath.Join(dir, "g.txt"), []byte("y\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "fix: a thing")
+
+	var stdout, stderr strings.Builder
+	if code := run([]string{"pr", "scaffold", "--issue", "7"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("scaffold exit = %d", code)
+	}
+	raw := filepath.Join(paper, "raw.md")
+	if err := os.WriteFile(raw, []byte(stdout.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"pr", "ready", "--path", dir, "--file", raw}, &stdout, &stderr); code != 1 {
+		t.Errorf("ready exit = %d, want 1 (the branch is fine but the body is a raw scaffold):\n%s\n%s", code, stdout.String(), stderr.String())
+	}
+
+	var lines []string
+	for _, line := range strings.Split(readTestFile(t, raw), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "<!--") {
+			lines = append(lines, "answered")
+			continue
+		}
+		lines = append(lines, line)
+	}
+	done := filepath.Join(paper, "done.md")
+	if err := os.WriteFile(done, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"pr", "ready", "--path", dir, "--file", done}, &stdout, &stderr); code != 0 {
+		t.Errorf("ready exit = %d, want 0:\n%s\n%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "pr ready: OK") {
+		t.Errorf("ready did not report OK:\n%s", stdout.String())
+	}
+}

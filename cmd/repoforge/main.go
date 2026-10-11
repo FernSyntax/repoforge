@@ -63,6 +63,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runWiki(args[1:], stdout, stderr)
 	case "pr":
 		return runPR(args[1:], stdout, stderr)
+	case "issue":
+		return runIssue(args[1:], stdout, stderr)
 	case "schema":
 		return runSchema(args[1:], stdout, stderr)
 	case "version", "--version":
@@ -137,6 +139,10 @@ Usage:
   repoforge git branch-check <branch>
   repoforge wiki sync [--path DIR] [--repo owner/name] [--apply] [--dry-run]
   repoforge pr check [--path DIR]
+  repoforge pr scaffold --issue N
+  repoforge pr ready --file BODY [--path DIR] [--repo owner/name]
+  repoforge issue scaffold --type bug|feature|task|security [--path DIR]
+  repoforge issue check --type bug|feature|task|security --file BODY [--path DIR]
   repoforge version
 
 validate checks the local repository checkout against the RepoForge
@@ -753,8 +759,8 @@ func runGit(args []string, stdout, stderr io.Writer) int {
 }
 
 func runPR(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 || (args[0] != "check" && args[0] != "check-body") {
-		fmt.Fprintln(stderr, "repoforge pr: want subcommand 'check' or 'check-body'")
+	if len(args) == 0 || (args[0] != "check" && args[0] != "check-body" && args[0] != "scaffold" && args[0] != "ready") {
+		fmt.Fprintln(stderr, "repoforge pr: want subcommand 'check', 'check-body', 'scaffold', or 'ready'")
 		return 2
 	}
 	// Each subcommand registers its own flags: a shared flag set here
@@ -764,9 +770,177 @@ func runPR(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "check":
 		return runPRCheck(args[1:], stdout, stderr)
+	case "scaffold":
+		return runPRScaffold(args[1:], stdout, stderr)
+	case "ready":
+		return runPRReady(args[1:], stdout, stderr)
 	default:
 		return runPRCheckBody(args[1:], stdout, stderr)
 	}
+}
+
+// runPRScaffold prints the pull request body skeleton for an issue:
+// every section the traceability contract requires, with the issue
+// link pre-placed. The skeleton alone does not validate — fill every
+// section, then prove it with `pr ready`.
+func runPRScaffold(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("pr scaffold", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	issue := fs.Int("issue", 0, "issue number the pull request closes")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "repoforge pr scaffold: unexpected argument %q\n", fs.Arg(0))
+		return 2
+	}
+	if *issue <= 0 {
+		fmt.Fprintln(stderr, "repoforge pr scaffold: --issue N is required (the issue the pull request closes)")
+		return 2
+	}
+	fmt.Fprint(stdout, gitrules.PRScaffold(*issue))
+	return 0
+}
+
+// runPRReady is the single local gate before opening a pull request:
+// branch readiness plus the body contract. Exit 0 means every
+// deterministic check CI runs will pass; anything else names exactly
+// what is red. With --repo it also confirms the linked issue exists.
+func runPRReady(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("pr ready", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	startDir := fs.String("path", ".", "repository directory")
+	bodyFile := fs.String("file", "", "file containing the pull request body; a value of - reads stdin")
+	repoSlug := fs.String("repo", "", "repository slug owner/name; enables issue-existence validation")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "repoforge pr ready: unexpected argument %q\n", fs.Arg(0))
+		return 2
+	}
+	if *bodyFile == "" {
+		fmt.Fprintln(stderr, "repoforge pr ready: --file is required")
+		return 2
+	}
+	data, err := readBody(*bodyFile)
+	if err != nil {
+		fmt.Fprintf(stderr, "repoforge pr ready: %v\n", err)
+		return 2
+	}
+	ready := gitrules.CheckPRReady(*startDir, "main")
+	printIssues(stdout, ready)
+	body := gitrules.CheckPRBody(string(data))
+	printIssues(stdout, body)
+	if gitrules.Failed(ready) || gitrules.Failed(body) {
+		fmt.Fprintln(stdout, "pr ready: not ready")
+		return 1
+	}
+	if *repoSlug != "" {
+		if err := confirmIssueExists(*repoSlug, string(data)); err != nil {
+			fmt.Fprintf(stderr, "repoforge pr ready: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, "pr ready: the linked issue exists")
+	}
+	fmt.Fprintln(stdout, "pr ready: OK")
+	return 0
+}
+
+// runIssue scaffolds and validates issue bodies against the
+// repository's issue forms, so API and CLI authors file once and file
+// right. No CI check constrains issue bodies; this pair is guidance
+// with teeth, not a new contract.
+func runIssue(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 || (args[0] != "scaffold" && args[0] != "check") {
+		fmt.Fprintln(stderr, "repoforge issue: want subcommand 'scaffold' or 'check'")
+		return 2
+	}
+	if args[0] == "scaffold" {
+		return runIssueScaffold(args[1:], stdout, stderr)
+	}
+	return runIssueCheck(args[1:], stdout, stderr)
+}
+
+// runIssueScaffold prints the skeleton for an issue form: one heading
+// per required field. The skeleton alone does not validate — fill
+// every field, then prove it with `issue check`.
+func runIssueScaffold(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("issue scaffold", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	startDir := fs.String("path", ".", "directory to start repository discovery from")
+	typ := fs.String("type", "", "issue form: bug, feature, task, or security")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "repoforge issue scaffold: unexpected argument %q\n", fs.Arg(0))
+		return 2
+	}
+	if *typ == "" {
+		fmt.Fprintln(stderr, "repoforge issue scaffold: --type is required (bug, feature, task, or security)")
+		return 2
+	}
+	root, err := gitrules.IssueFormRoot(*startDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "repoforge issue scaffold: %v\n", err)
+		return 1
+	}
+	_, fields, err := gitrules.LoadIssueFields(root, *typ)
+	if err != nil {
+		fmt.Fprintf(stderr, "repoforge issue scaffold: %v\n", err)
+		return 1
+	}
+	fmt.Fprint(stdout, gitrules.RenderIssueScaffold(fields))
+	return 0
+}
+
+// runIssueCheck validates a drafted issue body against the form's
+// required fields.
+func runIssueCheck(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("issue check", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	startDir := fs.String("path", ".", "directory to start repository discovery from")
+	typ := fs.String("type", "", "issue form: bug, feature, task, or security")
+	bodyFile := fs.String("file", "", "file containing the issue body; a value of - reads stdin")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "repoforge issue check: unexpected argument %q\n", fs.Arg(0))
+		return 2
+	}
+	if *typ == "" {
+		fmt.Fprintln(stderr, "repoforge issue check: --type is required (bug, feature, task, or security)")
+		return 2
+	}
+	if *bodyFile == "" {
+		fmt.Fprintln(stderr, "repoforge issue check: --file is required")
+		return 2
+	}
+	data, err := readBody(*bodyFile)
+	if err != nil {
+		fmt.Fprintf(stderr, "repoforge issue check: %v\n", err)
+		return 2
+	}
+	root, err := gitrules.IssueFormRoot(*startDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "repoforge issue check: %v\n", err)
+		return 1
+	}
+	_, fields, err := gitrules.LoadIssueFields(root, *typ)
+	if err != nil {
+		fmt.Fprintf(stderr, "repoforge issue check: %v\n", err)
+		return 1
+	}
+	issues := gitrules.CheckIssueBody(fields, string(data))
+	printIssues(stdout, issues)
+	if gitrules.Failed(issues) {
+		fmt.Fprintln(stdout, "issue check: not ready")
+		return 1
+	}
+	fmt.Fprintln(stdout, "issue check: OK")
+	return 0
 }
 
 // runPRCheck reports whether the branch is ready for a pull request.

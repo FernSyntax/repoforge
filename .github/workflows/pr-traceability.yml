@@ -8,10 +8,14 @@
 # actor keeps the flow usable while the body contract stays mandatory
 # for every human pull request.
 #
-# Runs on every pull request. The body is read from the event payload,
-# never from checked-out code, so untrusted content is treated as data.
-# Top-level permissions are empty; the job needs only issues:read to
-# confirm the referenced issue exists.
+# Runs on every pull request. The body is fetched live from the API,
+# never from the frozen triggering event payload, so a re-run or an
+# `edited` event validates what the pull request says now — a stale
+# pass is worse than a loud error. The body is untrusted input either
+# way: it is written to a file and validated as data, never executed
+# or interpreted. Top-level permissions are empty; the job needs only
+# issues:read to confirm the referenced issue exists, plus
+# pull-requests:read to fetch the body.
 #
 # Exceptions are narrow and named in the body itself:
 # `dependency-pull-request` and `urgent-security-fix`. There is no
@@ -56,13 +60,20 @@ jobs:
 
       # The PR body is untrusted input: it is written to a file and
       # validated as data. Nothing from it is executed or interpreted.
+      # The fetch is live, not the triggering payload: re-running a
+      # failed run validates the corrected body instead of the
+      # original one forever. A fetch failure fails the run.
       - name: Write the pull request body to a file
         if: github.actor != 'dependabot[bot]'
         env:
-          BODY: ${{ github.event.pull_request.body }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "$RUNNER_TEMP/pr"
-          printf '%s' "$BODY" > "$RUNNER_TEMP/pr/body.md"
+          if ! gh pr view "${{ github.event.pull_request.number }}" \
+            --json body --jq .body > "$RUNNER_TEMP/pr/body.md"; then
+            echo "::error::could not fetch the live pull request body"
+            exit 1
+          fi
           echo "body bytes: $(wc -c < "$RUNNER_TEMP/pr/body.md")"
 
       - name: Build the checker
