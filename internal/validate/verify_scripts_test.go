@@ -244,3 +244,48 @@ func TestCheckIssueFormsIsLoudOnDrift(t *testing.T) {
 		t.Errorf("the real forms were modified: %s", status)
 	}
 }
+
+// TestVerifyNeverSkipsSilently pins the fail-closed contract: every
+// check in scripts/verify either runs or fails the run. A missing
+// required tool must exit non-zero with the install instructions, never
+// print SKIPPED and report success.
+func TestVerifyNeverSkipsSilently(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "verify"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	if strings.Contains(body, "SKIPPED") {
+		t.Errorf("scripts/verify contains a silent-skip path; missing required tools must fail the run")
+	}
+	for _, tool := range []string{"shellcheck", "actionlint"} {
+		if !strings.Contains(body, "need "+tool) {
+			t.Errorf("scripts/verify does not gate %s through need(); an absent linter would go unnoticed", tool)
+		}
+	}
+}
+
+// TestVerifyFailsClosedOnMissingLinter executes the contract: with a
+// PATH that has the shell essentials but no Go toolchain, the run must
+// fail naming the tool — before running a single check — not pass.
+func TestVerifyFailsClosedOnMissingLinter(t *testing.T) {
+	bin := t.TempDir()
+	for _, tool := range []string{"dirname", "pwd"} {
+		src, err := exec.LookPath(tool)
+		if err != nil {
+			t.Skipf("%s not available to build the test PATH", tool)
+		}
+		if err := os.Symlink(src, filepath.Join(bin, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := t.TempDir()
+	// No "go", no "gofmt", no "git" on PATH: the very first need() must fire.
+	code, _, errOut := runScript(t, dir, []string{"PATH=" + bin}, "fast")
+	if code == 0 {
+		t.Errorf("scripts/verify fast with no Go toolchain on PATH exited 0; a missing prerequisite must fail")
+	}
+	if !strings.Contains(errOut, "required tool") {
+		t.Errorf("failure does not name the missing tool:\n%s", errOut)
+	}
+}
