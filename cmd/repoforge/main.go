@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -63,6 +64,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runWiki(args[1:], stdout, stderr)
 	case "pr":
 		return runPR(args[1:], stdout, stderr)
+	case "release":
+		return runRelease(args[1:], stdout, stderr)
+	case "hook":
+		return runHook(args[1:], stdout, stderr)
 	case "issue":
 		return runIssue(args[1:], stdout, stderr)
 	case "schema":
@@ -141,6 +146,9 @@ Usage:
   repoforge pr check [--path DIR]
   repoforge pr scaffold --issue N
   repoforge pr ready --file BODY [--path DIR] [--repo owner/name]
+  repoforge pr create --title T --file BODY [--path DIR] [--repo owner/name] [--base BRANCH] [--draft]
+  repoforge release ready --tag vX.Y.Z [--path DIR]
+  repoforge hook install|verify|uninstall [--path DIR]
   repoforge issue scaffold --type bug|feature|task|security [--path DIR]
   repoforge issue check --type bug|feature|task|security --file BODY [--path DIR]
   repoforge version
@@ -759,8 +767,8 @@ func runGit(args []string, stdout, stderr io.Writer) int {
 }
 
 func runPR(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 || (args[0] != "check" && args[0] != "check-body" && args[0] != "scaffold" && args[0] != "ready") {
-		fmt.Fprintln(stderr, "repoforge pr: want subcommand 'check', 'check-body', 'scaffold', or 'ready'")
+	if len(args) == 0 || (args[0] != "check" && args[0] != "check-body" && args[0] != "scaffold" && args[0] != "ready" && args[0] != "create") {
+		fmt.Fprintln(stderr, "repoforge pr: want subcommand 'check', 'check-body', 'scaffold', 'ready', or 'create'")
 		return 2
 	}
 	// Each subcommand registers its own flags: a shared flag set here
@@ -774,6 +782,8 @@ func runPR(args []string, stdout, stderr io.Writer) int {
 		return runPRScaffold(args[1:], stdout, stderr)
 	case "ready":
 		return runPRReady(args[1:], stdout, stderr)
+	case "create":
+		return runPRCreate(args[1:], stdout, stderr)
 	default:
 		return runPRCheckBody(args[1:], stdout, stderr)
 	}
@@ -828,22 +838,221 @@ func runPRReady(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "repoforge pr ready: %v\n", err)
 		return 2
 	}
-	ready := gitrules.CheckPRReady(*startDir, "main")
+	return prGate(*startDir, string(data), *repoSlug, stdout, stderr, "pr ready")
+}
+
+// prGate runs branch readiness plus the body contract and, with a
+// repository slug, confirms the linked issue exists. It prints every
+// finding and reports OK only when all three are green. Both `pr
+// ready` and `pr create` run this; creation can only happen after it.
+func prGate(startDir, body, repoSlug string, stdout, stderr io.Writer, name string) int {
+	ready := gitrules.CheckPRReady(startDir, "main")
 	printIssues(stdout, ready)
-	body := gitrules.CheckPRBody(string(data))
-	printIssues(stdout, body)
-	if gitrules.Failed(ready) || gitrules.Failed(body) {
-		fmt.Fprintln(stdout, "pr ready: not ready")
+	contract := gitrules.CheckPRBody(body)
+	printIssues(stdout, contract)
+	if gitrules.Failed(ready) || gitrules.Failed(contract) {
+		fmt.Fprintf(stdout, "%s: not ready\n", name)
 		return 1
 	}
-	if *repoSlug != "" {
-		if err := confirmIssueExists(*repoSlug, string(data)); err != nil {
-			fmt.Fprintf(stderr, "repoforge pr ready: %v\n", err)
+	if repoSlug != "" {
+		if err := confirmIssueExists(repoSlug, body); err != nil {
+			fmt.Fprintf(stderr, "repoforge %s: %v\n", name, err)
 			return 1
 		}
-		fmt.Fprintln(stdout, "pr ready: the linked issue exists")
+		fmt.Fprintf(stdout, "%s: the linked issue exists\n", name)
 	}
-	fmt.Fprintln(stdout, "pr ready: OK")
+	fmt.Fprintf(stdout, "%s: OK\n", name)
+	return 0
+}
+
+// runPRCreate gates exactly like `pr ready`, then delegates to
+// `gh pr create`. The network call is textually and structurally
+// after the gate: a red gate never reaches GitHub. Authentication
+// stays where it belongs — `gh` owns it, and an unauthenticated `gh`
+// fails with its own message, which is surfaced, not masked.
+func runPRCreate(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("pr create", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	startDir := fs.String("path", ".", "repository directory")
+	bodyFile := fs.String("file", "", "file containing the pull request body; a value of - reads stdin")
+	title := fs.String("title", "", "pull request title (must follow commit conventions)")
+	repoSlug := fs.String("repo", "", "repository slug owner/name; enables issue-existence validation")
+	base := fs.String("base", "", "base branch (defaults to the repository default branch)")
+	draft := fs.Bool("draft", false, "open the pull request as a draft")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "repoforge pr create: unexpected argument %q\n", fs.Arg(0))
+		return 2
+	}
+	if *title == "" {
+		fmt.Fprintln(stderr, "repoforge pr create: --title is required")
+		return 2
+	}
+	if *bodyFile == "" {
+		fmt.Fprintln(stderr, "repoforge pr create: --file is required")
+		return 2
+	}
+	if issues := gitrules.CheckCommitMessage(*title); gitrules.Failed(issues) {
+		printIssues(stdout, issues)
+		fmt.Fprintln(stderr, "repoforge pr create: the title must follow commit conventions (it becomes the squash-merge subject)")
+		return 1
+	}
+	if _, err := exec.LookPath("gh"); err != nil {
+		fmt.Fprintln(stderr, "repoforge pr create: gh is not installed or not on PATH; install it first: https://cli.github.com")
+		return 1
+	}
+	data, err := readBody(*bodyFile)
+	if err != nil {
+		fmt.Fprintf(stderr, "repoforge pr create: %v\n", err)
+		return 2
+	}
+	if code := prGate(*startDir, string(data), *repoSlug, stdout, stderr, "pr create"); code != 0 {
+		return code
+	}
+	root, err := gitTopLevel(*startDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "repoforge pr create: %v\n", err)
+		return 1
+	}
+	ghArgs := []string{"pr", "create", "--title", *title, "--body-file", *bodyFile}
+	if *base != "" {
+		ghArgs = append(ghArgs, "--base", *base)
+	}
+	if *draft {
+		ghArgs = append(ghArgs, "--draft")
+	}
+	return execGH(root, ghArgs, stdout, stderr)
+}
+
+// runRelease gates the release path. `release ready` runs the
+// release-policy check as the pre-tag gate: shape, annotation,
+// ancestry, changelog, version stamp. It performs no tagging,
+// pushing, or publishing — the firing action stays human.
+func runRelease(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 || args[0] != "ready" {
+		fmt.Fprintln(stderr, "repoforge release: want subcommand 'ready'")
+		return 2
+	}
+	fs := flag.NewFlagSet("release ready", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	startDir := fs.String("path", ".", "repository directory")
+	tag := fs.String("tag", "", "release tag to validate (e.g. v0.1.1)")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "repoforge release ready: unexpected argument %q\n", fs.Arg(0))
+		return 2
+	}
+	if *tag == "" {
+		fmt.Fprintln(stderr, "repoforge release ready: --tag is required (e.g. --tag v0.1.1)")
+		return 2
+	}
+	root, err := gitTopLevel(*startDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "repoforge release ready: %v\n", err)
+		return 1
+	}
+	script := filepath.Join(root, "scripts", "release-check.sh")
+	if _, err := os.Stat(script); err != nil {
+		fmt.Fprintf(stderr, "repoforge release ready: cannot reach scripts/release-check.sh: %v\n", err)
+		return 1
+	}
+	cmd := exec.Command("sh", script, *tag)
+	cmd.Dir = root
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			return ee.ExitCode()
+		}
+		fmt.Fprintf(stderr, "repoforge release ready: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, "release ready: OK")
+	return 0
+}
+
+// runHook manages the developer-side Git hooks through
+// scripts/hooks-install, discovered from the repository root so no
+// script path has to be memorized. It installs nothing itself: the
+// pre-commit framework still owns the blocking hooks, and hooks the
+// installer does not own are still never replaced.
+func runHook(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 || (args[0] != "install" && args[0] != "verify" && args[0] != "uninstall") {
+		fmt.Fprintln(stderr, "repoforge hook: want subcommand 'install', 'verify', or 'uninstall'")
+		return 2
+	}
+	fs := flag.NewFlagSet("hook "+args[0], flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	startDir := fs.String("path", ".", "repository directory")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "repoforge hook %s: unexpected argument %q\n", args[0], fs.Arg(0))
+		return 2
+	}
+	root, err := gitTopLevel(*startDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "repoforge hook %s: %v\n", args[0], err)
+		return 1
+	}
+	script := filepath.Join(root, "scripts", "hooks-install")
+	if _, err := os.Stat(script); err != nil {
+		fmt.Fprintf(stderr, "repoforge hook %s: cannot reach scripts/hooks-install: %v\n", args[0], err)
+		return 1
+	}
+	scriptArgs := []string{}
+	if args[0] == "verify" {
+		scriptArgs = []string{"--verify"}
+	} else if args[0] == "uninstall" {
+		scriptArgs = []string{"--uninstall"}
+	}
+	cmd := exec.Command("sh", append([]string{script}, scriptArgs...)...)
+	cmd.Dir = root
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			return ee.ExitCode()
+		}
+		fmt.Fprintf(stderr, "repoforge hook %s: %v\n", args[0], err)
+		return 1
+	}
+	return 0
+}
+
+// gitTopLevel resolves the repository root for a directory, so
+// wrappers operate on the checkout, not on the caller's cwd.
+func gitTopLevel(dir string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("cannot find a git repository from %q", dir)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// execGH delegates to the GitHub CLI with the caller's stdio. It is
+// only ever reached after a green gate; its failures surface with
+// gh's own message and exit code.
+func execGH(dir string, ghArgs []string, stdout, stderr io.Writer) int {
+	cmd := exec.Command("gh", ghArgs...)
+	cmd.Dir = dir
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	cmd.Stdin = os.Stdin
+	if err := cmd.Run(); err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() != 0 {
+			return ee.ExitCode()
+		}
+		fmt.Fprintf(stderr, "repoforge: gh failed: %v\n", err)
+		return 1
+	}
 	return 0
 }
 
@@ -852,14 +1061,18 @@ func runPRReady(args []string, stdout, stderr io.Writer) int {
 // right. No CI check constrains issue bodies; this pair is guidance
 // with teeth, not a new contract.
 func runIssue(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 || (args[0] != "scaffold" && args[0] != "check") {
-		fmt.Fprintln(stderr, "repoforge issue: want subcommand 'scaffold' or 'check'")
+	if len(args) == 0 || (args[0] != "scaffold" && args[0] != "check" && args[0] != "create") {
+		fmt.Fprintln(stderr, "repoforge issue: want subcommand 'scaffold', 'check', or 'create'")
 		return 2
 	}
-	if args[0] == "scaffold" {
+	switch args[0] {
+	case "scaffold":
 		return runIssueScaffold(args[1:], stdout, stderr)
+	case "check":
+		return runIssueCheck(args[1:], stdout, stderr)
+	default:
+		return runIssueCreate(args[1:], stdout, stderr)
 	}
-	return runIssueCheck(args[1:], stdout, stderr)
 }
 
 // runIssueScaffold prints the skeleton for an issue form: one heading
@@ -893,6 +1106,82 @@ func runIssueScaffold(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprint(stdout, gitrules.RenderIssueScaffold(fields))
 	return 0
+}
+
+// runIssueCreate validates the drafted body against the form, then
+// delegates to `gh issue create` with the form's declared labels, so
+// automation files under the same labels a web-filed issue would get.
+// Gate-before-delegate, as in `pr create`.
+func runIssueCreate(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("issue create", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	startDir := fs.String("path", ".", "directory to start repository discovery from")
+	typ := fs.String("type", "", "issue form: bug, feature, task, or security")
+	title := fs.String("title", "", "issue title")
+	bodyFile := fs.String("file", "", "file containing the issue body; a value of - reads stdin")
+	repoSlug := fs.String("repo", "", "repository slug owner/name; creation defaults to the checkout's repository")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "repoforge issue create: unexpected argument %q\n", fs.Arg(0))
+		return 2
+	}
+	if *typ == "" {
+		fmt.Fprintln(stderr, "repoforge issue create: --type is required (bug, feature, task, or security)")
+		return 2
+	}
+	if *title == "" {
+		fmt.Fprintln(stderr, "repoforge issue create: --title is required")
+		return 2
+	}
+	if *bodyFile == "" {
+		fmt.Fprintln(stderr, "repoforge issue create: --file is required")
+		return 2
+	}
+	if _, err := exec.LookPath("gh"); err != nil {
+		fmt.Fprintln(stderr, "repoforge issue create: gh is not installed or not on PATH; install it first: https://cli.github.com")
+		return 1
+	}
+	data, err := readBody(*bodyFile)
+	if err != nil {
+		fmt.Fprintf(stderr, "repoforge issue create: %v\n", err)
+		return 2
+	}
+	root, err := gitrules.IssueFormRoot(*startDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "repoforge issue create: %v\n", err)
+		return 1
+	}
+	_, fields, err := gitrules.LoadIssueFields(root, *typ)
+	if err != nil {
+		fmt.Fprintf(stderr, "repoforge issue create: %v\n", err)
+		return 1
+	}
+	issues := gitrules.CheckIssueBody(fields, string(data))
+	printIssues(stdout, issues)
+	if gitrules.Failed(issues) {
+		fmt.Fprintln(stdout, "issue create: not ready")
+		return 1
+	}
+	labels, err := gitrules.IssueFormLabels(root, *typ)
+	if err != nil {
+		fmt.Fprintf(stderr, "repoforge issue create: %v\n", err)
+		return 1
+	}
+	ghArgs := []string{"issue", "create", "--title", *title, "--body-file", *bodyFile}
+	for _, l := range labels {
+		ghArgs = append(ghArgs, "--label", l)
+	}
+	if *repoSlug != "" {
+		ghArgs = append(ghArgs, "--repo", *repoSlug)
+	}
+	top, err := gitTopLevel(*startDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "repoforge issue create: %v\n", err)
+		return 1
+	}
+	return execGH(top, ghArgs, stdout, stderr)
 }
 
 // runIssueCheck validates a drafted issue body against the form's

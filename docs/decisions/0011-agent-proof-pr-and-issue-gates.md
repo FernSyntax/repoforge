@@ -77,3 +77,9 @@ without adding any new required CI check:
   secret-detection, or scorecard.
 - The workflow change is behavior-preserving on `opened`
   (payload body equals live body) and strictly fresher afterwards.
+
+## Amendment
+
+ADR-0012 reverses the `pr create` wrapper rejection: operation showed
+unwired tools do not interrupt, and uninterrupted agents reproduce the
+PR #4 failure class. The scaffold/check surface below is unchanged.

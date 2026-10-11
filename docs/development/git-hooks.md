@@ -32,9 +32,12 @@ passed.
 
 ## Install
 
-One command, idempotent:
+One command, idempotent — via the CLI (discovered from the repository
+root, no script path to memorize) or directly:
 
 ```sh
+repoforge hook install
+# or:
 scripts/hooks-install
 ```
 

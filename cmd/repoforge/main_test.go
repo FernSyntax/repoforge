@@ -561,3 +561,212 @@ func TestPRReadyGatesTheFullLoop(t *testing.T) {
 		t.Errorf("ready did not report OK:\n%s", stdout.String())
 	}
 }
+
+// gatedRepo builds a topic branch with one conventional commit ahead
+// of main and a clean tree: the shape every create wrapper requires.
+func gatedRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid",
+			"GIT_CONFIG_NOSYSTEM=1", "HOME="+t.TempDir(),
+			"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=commit.gpgsign", "GIT_CONFIG_VALUE_0=false")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "--quiet", "-b", "main", ".")
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "chore: base")
+	git("checkout", "--quiet", "-b", "fix/7-thing")
+	if err := os.WriteFile(filepath.Join(dir, "g.txt"), []byte("y\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "fix: a thing")
+	return dir
+}
+
+// stubGH installs a gh that records its arguments and succeeds, so
+// tests prove what would be delegated without touching the network.
+// It returns the bin directory (prepend to PATH) and the log file.
+func stubGH(t *testing.T) (bin, log string) {
+	t.Helper()
+	bin = t.TempDir()
+	log = filepath.Join(t.TempDir(), "calls.log")
+	script := "#!/bin/sh\necho \"gh $*\" >> \"" + log + "\"\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin, log
+}
+
+// withPATH runs f with PATH set to bin plus the system git. The stub
+// gh shadows the real one while git keeps working.
+func withPATH(t *testing.T, bin string) {
+	t.Helper()
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+filepath.Dir(git))
+}
+
+// filledPRScaffold writes a fully answered PR scaffold for issue 7.
+func filledPRScaffold(t *testing.T) string {
+	t.Helper()
+	var out, errOut strings.Builder
+	if code := run([]string{"pr", "scaffold", "--issue", "7"}, &out, &errOut); code != 0 {
+		t.Fatalf("scaffold exit = %d", code)
+	}
+	var lines []string
+	for _, line := range strings.Split(out.String(), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "<!--") {
+			lines = append(lines, "answered")
+			continue
+		}
+		lines = append(lines, line)
+	}
+	done := filepath.Join(t.TempDir(), "pr.md")
+	if err := os.WriteFile(done, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return done
+}
+
+// TestPRCreateNeverReachesAGreenGate proves gate-before-delegate: a
+// raw scaffold stops the run and the stub gh is never invoked, while
+// a filled body on a ready branch delegates exactly once.
+func TestPRCreateNeverReachesAGreenGate(t *testing.T) {
+	dir := gatedRepo(t)
+	bin, log := stubGH(t)
+	withPATH(t, bin)
+
+	var stdout, stderr strings.Builder
+	if code := run([]string{"pr", "scaffold", "--issue", "7"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("scaffold exit = %d", code)
+	}
+	raw := filepath.Join(t.TempDir(), "raw.md")
+	if err := os.WriteFile(raw, []byte(stdout.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"pr", "create", "--title", "fix: a thing", "--file", raw, "--path", dir}, &stdout, &stderr); code != 1 {
+		t.Fatalf("create exit = %d, want 1 (raw scaffold must stop before the network)", code)
+	}
+	if _, err := os.Stat(log); !os.IsNotExist(err) {
+		t.Errorf("gh was invoked despite a red gate")
+	}
+
+	done := filledPRScaffold(t)
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"pr", "create", "--title", "fix: a thing", "--file", done, "--path", dir}, &stdout, &stderr); code != 0 {
+		t.Fatalf("create exit = %d, want 0:\n%s\n%s", code, stdout.String(), stderr.String())
+	}
+	calls, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatalf("gh was not invoked on a green gate: %v", err)
+	}
+	if !strings.Contains(string(calls), "pr create --title fix: a thing") {
+		t.Errorf("gh was not asked to create the PR:\n%s", calls)
+	}
+}
+
+// TestPRCreateChecksTheTitle proves the title is validated locally:
+// it becomes the squash-merge subject, so a non-conventional title
+// fails before the gate even runs.
+func TestPRCreateChecksTheTitle(t *testing.T) {
+	dir := gatedRepo(t)
+	bin, _ := stubGH(t)
+	withPATH(t, bin)
+	done := filledPRScaffold(t)
+
+	var stdout, stderr strings.Builder
+	if code := run([]string{"pr", "create", "--file", done, "--path", dir}, &stdout, &stderr); code != 2 {
+		t.Errorf("exit = %d, want 2 (a missing --title is a usage error)", code)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"pr", "create", "--title", "wip stuff", "--file", done, "--path", dir}, &stdout, &stderr); code != 1 {
+		t.Errorf("exit = %d, want 1 (a non-conventional title must fail)", code)
+	}
+}
+
+// TestIssueCreateDelegatesWithFormLabels proves a filled issue body
+// delegates to gh with the form's declared labels attached.
+func TestIssueCreateDelegatesWithFormLabels(t *testing.T) {
+	chdir(t, repoRoot(t))
+	bin, log := stubGH(t)
+	withPATH(t, bin)
+
+	body := filepath.Join(t.TempDir(), "issue.md")
+	content := "### What happened?\n\nit broke\n\n### Expected behaviour\n\nworks\n\n### Steps to reproduce\n\nrun it\n\n### Severity\n\ncorrectness: wrong result, no data loss\n\n### Affected requirements\n\nunknown\n"
+	if err := os.WriteFile(body, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	if code := run([]string{"issue", "create", "--type", "bug", "--title", "t", "--file", body}, &stdout, &stderr); code != 0 {
+		t.Fatalf("create exit = %d, want 0:\n%s\n%s", code, stdout.String(), stderr.String())
+	}
+	calls, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatalf("gh was not invoked: %v", err)
+	}
+	for _, want := range []string{"issue create", "--label", "bug"} {
+		if !strings.Contains(string(calls), want) {
+			t.Errorf("gh invocation is missing %q:\n%s", want, calls)
+		}
+	}
+}
+
+// TestCreateReportsAMissingGH proves a missing gh is reported, never
+// silently skipped — with a PATH that contains nothing at all.
+func TestCreateReportsAMissingGH(t *testing.T) {
+	chdir(t, repoRoot(t))
+	body := filepath.Join(t.TempDir(), "issue.md")
+	if err := os.WriteFile(body, []byte("### What happened?\n\nx\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	var stdout, stderr strings.Builder
+	if code := run([]string{"issue", "create", "--type", "bug", "--title", "t", "--file", body}, &stdout, &stderr); code != 1 {
+		t.Errorf("exit = %d, want 1 (a missing gh must fail loudly)", code)
+	}
+	if !strings.Contains(stderr.String(), "gh is not installed") {
+		t.Errorf("the failure does not name the missing gh:\n%s", stderr.String())
+	}
+}
+
+// TestHookReportsOutsideARepo proves the hook entry point fails
+// closed where there is no repository to install into.
+func TestHookReportsOutsideARepo(t *testing.T) {
+	var stdout, stderr strings.Builder
+	if code := run([]string{"hook", "verify", "--path", t.TempDir()}, &stdout, &stderr); code != 1 {
+		t.Errorf("exit = %d, want 1 (no repository, no hooks)", code)
+	}
+}
+
+// TestReleaseReadyDelegatesToThePolicyScript proves `--tag` is
+// mandatory and the policy script's verdict is the command's verdict.
+func TestReleaseReadyDelegatesToThePolicyScript(t *testing.T) {
+	chdir(t, repoRoot(t))
+	var stdout, stderr strings.Builder
+	if code := run([]string{"release", "ready"}, &stdout, &stderr); code != 2 {
+		t.Errorf("exit = %d, want 2 (a missing --tag is a usage error)", code)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"release", "ready", "--tag", "not-a-version"}, &stdout, &stderr); code == 0 {
+		t.Errorf("exit = 0, want non-zero (a malformed tag must fail)")
+	}
+}
