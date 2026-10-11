@@ -115,6 +115,7 @@ func Run(opts Options) (Report, error) {
 	rep.Findings = append(rep.Findings, checkContent(root, tracked, pol)...)
 	rep.Findings = append(rep.Findings, checkMarkdownLinks(root, tracked)...)
 	rep.Findings = append(rep.Findings, checkDecisions(root, trackedSet)...)
+	rep.Findings = append(rep.Findings, checkAgentFiles(root, trackedSet)...)
 
 	sort.Slice(rep.Findings, func(i, j int) bool {
 		a, b := rep.Findings[i], rep.Findings[j]
