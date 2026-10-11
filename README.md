@@ -4,6 +4,8 @@ Opinionated repository engineering for GitHub: a declarative standard plus a CLI
 
 RepoForge is an open-source standard for how GitHub repositories should be structured, governed, validated, and released — and a Go CLI (`repoforge`) that bootstraps repositories to the standard, audits drift read-only, and validates checkouts deterministically. It is for solo developers and small teams who want every repository to start governed and stay governed, without babysitting settings pages.
 
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15393/badge)](https://www.bestpractices.dev/en/projects/15393) — this project holds the [OpenSSF Best Practices passing badge](https://www.bestpractices.dev/en/projects/15393); the control-by-control evidence is [docs/security/osps-baseline.md](docs/security/osps-baseline.md). The [v0.1.0 release](https://github.com/FernSyntax/repoforge/releases/tag/v0.1.0) carries SBOMs, checksums, and build-provenance attestations.
+
 ## Quick start
 
 ```sh
