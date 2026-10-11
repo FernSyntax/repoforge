@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 RepoForge v0.1.0 is the first public release. It begins a fresh product
 history: there is no earlier version of *this* product to record.
 
+## [Unreleased]
+
+Hardens the release and template-publication path without changing what
+v0.1.0 shipped. No tag, release, or asset is modified.
+
+### Fixed
+
+- **Release publishes only after verification.** The `Release` workflow
+  now stages a draft, uploads missing assets without overwriting,
+  verifies the complete staged draft (exact asset set, real checksum
+  verification, attestation over every archive), and only then flips
+  the draft public with the flip confirmed. Re-running resumes the
+  staged draft; a published release fails the run instead of being
+  touched.
+- **Publication concurrency is keyed on the release.** The
+  `Template Publication` concurrency group is
+  `template-publication-<tag>` with `cancel-in-progress: false`, so a
+  later run for a different release can never kill an active
+  publication.
+- **Archive names use lowercase OS spellings.** The GoReleaser matrix
+  and every documented asset name now agree
+  (`repoforge_X.Y.Z_linux_amd64.tar.gz`, never `Linux`).
+
 ## [0.1.0] — 2026-10-10
 
 First public release.

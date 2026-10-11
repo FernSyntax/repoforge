@@ -56,22 +56,33 @@ No credentials are involved — verification is fully public.
 
 ```sh
 # 1. Fetch the release assets (archives, SBOMs, checksums.txt).
-gh release download v0.1.0 --repo <owner>/<repo> --dir ./repoforge-0.1.0
+gh release download v0.1.0 --repo <owner>/<repo> \
+  repoforge_0.1.0_linux_amd64.tar.gz \
+  repoforge_0.1.0_linux_amd64.tar.gz.sbom.json \
+  checksums.txt --dir ./repoforge-0.1.0
 
 cd ./repoforge-0.1.0
 
 # 2. Verify file integrity against the published checksums.
-sha256sum -c checksums.txt
+# --ignore-missing covers exactly the files downloaded: checksums.txt
+# lists every release asset, so a plain `sha256sum -c` would fail on
+# the files not fetched.
+sha256sum --ignore-missing -c checksums.txt
 
 # 3. Verify build provenance: the archive was built from the
 # tagged source by this repository's Release workflow.
-gh attestation verify repoforge_0.1.0_Linux_amd64.tar.gz \
+gh attestation verify repoforge_0.1.0_linux_amd64.tar.gz \
   --repo <owner>/<repo>
 
 # 4. Confirm the binary reports its own version.
-tar -xzf repoforge_0.1.0_Linux_amd64.tar.gz repoforge
+tar -xzf repoforge_0.1.0_linux_amd64.tar.gz repoforge
 ./repoforge version
 ```
+
+Archive names use lowercase OS spellings, exactly as GoReleaser
+emits them (`repoforge_0.1.0_linux_amd64.tar.gz`, never `Linux`).
+Supported build matrix: Linux and macOS on amd64 and arm64; Windows
+on amd64 only (`repoforge_0.1.0_windows_amd64.zip`).
 
 `gh attestation verify` checks the Sigstore signature, the SLSA
 predicate (repository, workflow, and commit it names), and that the

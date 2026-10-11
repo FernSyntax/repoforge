@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -1155,4 +1156,119 @@ func TestDuplicatePublicationIsIdempotent(t *testing.T) {
 	if tag > verify {
 		t.Errorf("the final state check (step %d) runs before the tag/release step (step %d)", verify, tag)
 	}
+}
+
+// goreleaserMatrix computes the expected archive set from .goreleaser.yaml:
+// every (goos, goarch) pair minus ignores, with the per-OS archive format.
+func goreleaserMatrix(t *testing.T) map[string]bool {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", ".goreleaser.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Builds []struct {
+			Goos   []string `yaml:"goos"`
+			Goarch []string `yaml:"goarch"`
+			Ignore []struct {
+				Goos   string `yaml:"goos"`
+				Goarch string `yaml:"goarch"`
+			} `yaml:"ignore"`
+		} `yaml:"builds"`
+		Archives []struct {
+			Formats         []string `yaml:"formats"`
+			FormatOverrides []struct {
+				Goos    string   `yaml:"goos"`
+				Formats []string `yaml:"formats"`
+			} `yaml:"format_overrides"`
+		} `yaml:"archives"`
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("cannot parse .goreleaser.yaml: %v", err)
+	}
+	if len(cfg.Builds) == 0 || len(cfg.Archives) == 0 {
+		t.Fatal(".goreleaser.yaml has no builds or no archives")
+	}
+	b := cfg.Builds[0]
+	ignored := map[string]bool{}
+	for _, ig := range b.Ignore {
+		ignored[ig.Goos+"/"+ig.Goarch] = true
+	}
+	extFor := map[string]string{}
+	for _, o := range b.Goos {
+		extFor[o] = cfg.Archives[0].Formats[0]
+	}
+	for _, fo := range cfg.Archives[0].FormatOverrides {
+		extFor[fo.Goos] = fo.Formats[0]
+	}
+	out := map[string]bool{}
+	for _, o := range b.Goos {
+		for _, a := range b.Goarch {
+			if ignored[o+"/"+a] {
+				continue
+			}
+			ext, ok := extFor[o]
+			if !ok {
+				t.Fatalf("no archive format for GOOS %s", o)
+			}
+			out[o+"/"+a+"/"+ext] = true
+		}
+	}
+	return out
+}
+
+// documentedAssets finds repoforge_<ver>_<os>_<arch>.<ext> examples in
+// user-facing docs, normalizing the version away.
+func documentedAssets(t *testing.T, paths ...string) []string {
+	t.Helper()
+	re := regexp.MustCompile(`repoforge_[0-9X.]+\.[0-9X.]+(?:\.[0-9X.]+)?_([A-Za-z0-9]+)_([A-Za-z0-9]+)\.(tar\.gz|zip)`)
+	var found []string
+	for _, p := range paths {
+		data, err := os.ReadFile(filepath.Join("..", "..", p))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+			for _, m := range re.FindAllStringSubmatch(line, -1) {
+				found = append(found, p+": "+m[1]+"/"+m[2]+"/"+m[3])
+			}
+		}
+	}
+	return found
+}
+
+// TestDocumentedAssetNamesMatchTheReleaseMatrix proves the install and
+// verify examples name files the release actually produces. A wrong case
+// (`Linux` for `linux`), a wrong arch per OS, or a wrong extension
+// means a copy/pasted command fails on a correct release.
+func TestDocumentedAssetNamesMatchTheReleaseMatrix(t *testing.T) {
+	matrix := goreleaserMatrix(t)
+	docs := []string{
+		"README.md",
+		"docs/development/release-process.md",
+		"docs/security/release-integrity.md",
+	}
+	found := documentedAssets(t, docs...)
+	if len(found) == 0 {
+		t.Fatal("no documented asset examples found; the install procedure must name real files")
+	}
+	for _, f := range found {
+		parts := strings.SplitN(f, ": ", 2)
+		if !matrix[parts[1]] {
+			t.Errorf("%s names an asset the release matrix never produces; wanted one of %v", f, sortedKeys(matrix))
+		}
+	}
+}
+
+func sortedKeys(m map[string]bool) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
