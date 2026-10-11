@@ -407,6 +407,19 @@ In scope:
          that the release for that tag targets the exact commit being
          built.
 
+14.3.3. **Publication privilege separation.** The publication workflow
+         MUST split the build from the credential. The job that checks
+         out and executes the release source (the build job) MUST hold
+         no secrets and no id-token — `contents: read` is its only
+         grant. The job that holds the publishing credential (the
+         publish job) MUST execute only trusted code: the engine from
+         the default branch, plus the build artifact, whose release
+         identity (manifest source commit and digest, tag resolution)
+         it re-derives through the API before the credential is minted.
+         No checkout in the workflow MAY carry an event expression as
+         its ref: the release identity is resolved through the API and
+         passed as data (ADR-0014).
+
 14.3.1. The operational release procedure is defined in
       docs/development/release-process.md, which is a normative
       extension of this section (6.10).
@@ -497,7 +510,7 @@ In scope:
 | A token is committed | `validate` and `template` scan for token- and key-shaped material; secret scanning with push protection is part of the standard. |
 | A token appears in output | Error paths construct messages from fixed text; the token is never interpolated. Tests assert redaction. |
 | Template tampering | The immutable manifest plus rebuild-from-source verification (§13.7). |
-| An untrusted pull request reaches a publishing credential | Pull-request workflows never receive the template-publishing credential; publication runs only on the trusted release workflow, on the expected repository and tag. |
+| An untrusted pull request reaches a publishing credential | Pull-request workflows never receive the template-publishing credential; publication runs only on the trusted release workflow, on the expected repository and tag. The workflow separates the build from the credential: the job that executes the release source holds no secrets and no id-token, and the credential exists only in a job that executes default-branch engine code and the verified artifact (§14.3.3). |
 | A dependency changes under the build | Actions are pinned to full commit SHAs; downloaded tools are verified against published SHA-256 sums; Go module integrity is checked. |
 | A diverted wiki destination | The publish path verifies the clone's origin against the requested repository before writing, and never force-pushes. |
 | A stale or wrong wiki | `wiki sync` is a dry run by default and never deletes pages outside the declared set. |

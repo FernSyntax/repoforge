@@ -50,13 +50,29 @@ RepoForge release tag
 Canonical template/ source
         |
         v
+Resolve the release identity (API): release exists, annotated tag,
+tag object -> commit
+        |
+        v
+Checkout the resolved commit (as data, never an event expression)
+        |
+        v
 Build + render (immutable provenance recorded in the manifest)
         |
         v
 Validate: model, manifest, determinism
         |
         v
-Cross-repository publication (GitHub App token, minted in this job only)
+Upload the verified build
+        |
+        v
+  ┌──────────────────────────────────────────────┐
+  │ publish job (needs: build) — trusted code    │
+  │ Checkout the default-branch engine           │
+  │ Download + re-verify the artifact            │
+  │ Re-derive the release identity (manifest+API)│
+  │ ... then mint the App token, only here       │
+  └──────────────────────────────────────────────┘
         |
         +-------------------------+
         |                         |
@@ -72,6 +88,16 @@ Hosted template CI          Required checks
         v                         v
 Publish v0.1.0              Publish matching release after merge
 ```
+
+The workflow is two jobs with one trust boundary (ADR-0014). The
+**build** job executes the release source and holds no credential at
+all — `contents: read`, no secrets, no id-token. The **publish** job
+holds the App private key and executes only trusted code: the engine
+from the default branch, plus the verified artifact. The private key
+therefore never coexists with the execution of release-source code,
+and the artifact's release identity is re-derived with trusted tooling
+(manifest source commit and digest, tag resolution through the API)
+before the token is minted.
 
 ## The credential: one dedicated GitHub App
 
