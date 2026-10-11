@@ -1,3 +1,7 @@
+// Copyright the repoforge contributors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Package version exposes the build version of the repoforge CLI.
 // The values are stamped by release tooling; see spec.md, "Release
 // model".

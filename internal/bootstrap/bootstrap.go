@@ -1,3 +1,7 @@
+// Copyright the repoforge contributors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Package bootstrap converges a repository to the RepoForge policy.
 //
 // Bootstrap is idempotent (spec.md §10.2): running it twice converges to

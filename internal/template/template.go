@@ -1,3 +1,7 @@
+// Copyright the repoforge contributors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Package template builds the generated repository baseline consumed by
 // the RepoForge template repository (spec.md §13). The source
 // material in template/ contains only files intended to appear in a

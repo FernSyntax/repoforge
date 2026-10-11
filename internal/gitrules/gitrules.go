@@ -1,3 +1,7 @@
+// Copyright the repoforge contributors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Package gitrules implements RepoForge's commit message and branch
 // naming rules (docs/development/commit-conventions.md,
 // docs/development/branching.md). It is the single source of truth for
