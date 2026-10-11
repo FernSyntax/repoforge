@@ -36,6 +36,12 @@ CI is authoritative; these are local feedback only.
   builder/bootstrap — do not "fix" them by substituting identities.
 - Never bypass repository governance: no force-push, no disabling
   checks, no self-approving, no amending published history.
+- Before opening a pull request, scaffold its body with
+  `repoforge pr scaffold --issue N` and do not open it until
+  `repoforge pr ready --file <body> [--repo owner/name]` reports OK.
+  The same applies to issues via `repoforge issue scaffold` and
+  `repoforge issue check`. A red CI check you could have run locally
+  is an authoring failure, not a CI failure.
 - Stop when the requested scope is complete. Report what changed and
   how it was verified.
 

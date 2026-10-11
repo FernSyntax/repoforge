@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 RepoForge v0.1.0 is the first public release. It begins a fresh product
 history: there is no earlier version of *this* product to record.
 
+## [Unreleased]
+
+### Added
+
+- **Agent-proof contribution gates.** `repoforge pr scaffold --issue N`
+  prints the pull request body skeleton with every traceability
+  section and the issue link pre-placed; `repoforge pr ready --file`
+  is the single local gate (branch readiness plus body contract) —
+  green means every deterministic CI check will pass.
+  `repoforge issue scaffold` / `repoforge issue check` do the same
+  for the issue forms. See ADR-0011.
+
+### Fixed
+
+- **Traceability validates the live PR body.** The workflow fetched
+  the body from the frozen triggering event payload, so re-running a
+  failed run re-checked the original body forever. It now fetches the
+  live body; a fetch failure fails the run.
+
 ## [0.1.0] — 2026-10-10
 
 First public release.
