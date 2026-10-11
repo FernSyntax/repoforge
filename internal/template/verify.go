@@ -119,7 +119,11 @@ func Verify(dir, sourceURL string, requireSource bool) ([]Issue, error) {
 				RepoForgeVersion: m.RepoForgeVersion,
 				SourceRef:        m.SourceRef,
 				SourceCommit:     m.SourceCommit,
-				SourceURL:        sourceURL,
+				// The rebuild must reproduce the recorded build
+				// byte-for-byte, so it records the manifest's URL, not
+				// the fetch override: --source-url selects where to
+				// fetch from (a mirror), never what the manifest says.
+				SourceURL: m.SourceURL,
 			},
 		})
 	if err != nil {
