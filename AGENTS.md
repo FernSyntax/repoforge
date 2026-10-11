@@ -55,11 +55,11 @@ squash-merge subject); one coherent purpose per pull request.
 ```sh
 # Issues and PRs: scaffold, fill, gate — never freehand.
 repoforge issue scaffold --type bug|feature|task|security
-repoforge issue check --type T --file BODY        # then: gh issue create
+repoforge issue check --type T --file BODY        # or create directly:
+repoforge issue create --type T --title T --file BODY [--repo slug]
 repoforge pr scaffold --issue N
 repoforge pr ready --file BODY [--repo owner/name]  # green means go
 # Or gate-and-delegate in one step (gh owns auth):
-repoforge issue create --type T --title T --file BODY [--repo slug]
 repoforge pr create --title T --file BODY [--repo slug]
 ```
 

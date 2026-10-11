@@ -81,8 +81,14 @@ lines are drift: re-run `repoforge bootstrap` or fix by hand.
 ## 7. First issue
 
 ```sh
-gh issue create --title "Set up <thing>" --body "First task."
+gh issue create --title "Set up <thing>" --body-file /tmp/first-task.md
 ```
+
+Write `/tmp/first-task.md` first, with one `### <label>` section per
+required field of the chosen issue form — GitHub maps the headings
+onto the form. A one-line `--body` cannot answer a form and will be
+sent back. Never file an empty or placeholder issue to "test" the
+flow.
 
 ## 8. First branch
 
@@ -106,9 +112,13 @@ Conventional Commits are enforced by validation. See
 ## 10. First PR
 
 ```sh
-gh pr create --fill
+gh pr create --title "feat: set up thing" --body-file /tmp/first-pr.md
 ```
 
-Fill the template sections (validation evidence is required), wait for
-green CI and review, then squash merge. See
+Write `/tmp/first-pr.md` first: every section of
+`.github/PULL_REQUEST_TEMPLATE.md` filled ("none" with a reason beats
+an empty section), plus `Closes #N`. Never use `--fill` — a body
+generated from commit subjects cannot satisfy the template contract
+and fails CI. Fill the template sections (validation evidence is
+required), wait for green CI and review, then squash merge. See
 [pull-request-strategy.md](pull-request-strategy.md).

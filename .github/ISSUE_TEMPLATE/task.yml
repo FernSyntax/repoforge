@@ -1,6 +1,6 @@
 name: Task
 description: Scoped maintenance or engineering work
-labels: ["task"]
+labels: ["type:task"]
 body:
   - type: textarea
     id: objective

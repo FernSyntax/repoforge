@@ -289,3 +289,65 @@ func TestVerifyFailsClosedOnMissingLinter(t *testing.T) {
 		t.Errorf("failure does not name the missing tool:\n%s", errOut)
 	}
 }
+
+// TestCheckIssueFormsRejectsNonCanonicalLabels proves a form that
+// files under a label the repository does not have fails with the
+// label named — the exact drift that broke `issue create --type task`
+// before the fix. The canonical set comes from a sandbox labels file,
+// so the test pins the cross-check, not the repository's live labels.
+func TestCheckIssueFormsRejectsNonCanonicalLabels(t *testing.T) {
+	sandbox := t.TempDir()
+	writeSandbox := func(rel, body string) {
+		t.Helper()
+		dst := filepath.Join(sandbox, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dst, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), filepath.FromSlash("scripts/check-issue-forms")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSandbox("scripts/check-issue-forms", string(data))
+	for _, rel := range []string{
+		".github/PULL_REQUEST_TEMPLATE.md",
+		".github/ISSUE_TEMPLATE/config.yml",
+	} {
+		data, err := os.ReadFile(filepath.Join(repoRoot(t), filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeSandbox(rel, string(data))
+	}
+	writeSandbox("configs/github/labels.yaml", "version: 1\nlabels:\n  - name: \"type:task\"\n")
+	form := "name: T\ndescription: D\nlabels: [\"task\"]\nbody:\n  - type: textarea\n    id: objective\n    attributes:\n      label: Objective\n    validations:\n      required: true\n"
+	writeSandbox(".github/ISSUE_TEMPLATE/task.yml", form)
+
+	cmd := exec.Command(filepath.Join(sandbox, "scripts", "check-issue-forms"))
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("a form with a non-canonical label must fail:\n%s", out)
+	}
+	if !strings.Contains(string(out), "'task'") {
+		t.Errorf("the failure does not name the label:\n%s", out)
+	}
+
+	writeSandbox(".github/ISSUE_TEMPLATE/task.yml", `name: T
+description: D
+labels: ["type:task"]
+body:
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+    validations:
+      required: true
+`)
+	cmd = exec.Command(filepath.Join(sandbox, "scripts", "check-issue-forms"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("a form with a canonical label must pass:\n%s", out)
+	}
+}

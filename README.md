@@ -181,16 +181,27 @@ go install github.com/FernSyntax/repoforge/cmd/repoforge@latest
 
 ## Example workflow
 
+Every step below is gated: scaffolds emit the exact contract, `ready`
+gates prove it locally, and `create` wrappers delegate to `gh` only on
+green. Raw `gh issue create --body` / `gh pr create --body` skip every
+gate and fail CI — do not use them.
+
 ```sh
-gh issue create --title "Add search" --body "What/why."
+repoforge hook install   # once per clone: blocking commit/push gates
+repoforge issue scaffold --type feature > /tmp/search.md
+# ... fill every required field ...
+repoforge issue create --type feature --title "Add search" --file /tmp/search.md
+# Note the issue number from the URL, then:
 git checkout -b feat/12-add-search
 # ... work ...
-git add . && git commit -m "feat(search): add query parser"
-git push -u origin feat/12-add-search
-gh pr create --title "feat(search): add query parser" --body "Closes #12."
+git add . && git commit -m "feat(search): add query parser"   # commit-msg hook checks
+git push -u origin feat/12-add-search   # pre-push runs scripts/verify full
+repoforge pr scaffold --issue 12 > /tmp/pr.md
+# ... fill every section ...
+repoforge pr create --title "feat(search): add query parser" --file /tmp/pr.md
 # CI runs: validation, tests, security, dependency review, secret detection.
 gh pr checks --watch
-gh pr merge --squash --delete-branch   # after green
+gh pr merge --squash --delete-branch   # after green, a human decision
 ```
 
 ## Configuration

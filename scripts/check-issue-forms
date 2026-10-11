@@ -116,6 +116,38 @@ for form in forms:
             elif not isinstance(validations.get("required", False), bool):
                 problems.append(f"{where}: validations.required must be a boolean")
 
+# A form that files under a label the repository does not have is a
+# broken front door with the failure deferred to filing time (a `gh`
+# failure the author cannot fix). Form labels must name canonical
+# labels. The canonical file is absent in minimal fixtures, where the
+# check is skipped — never failed.
+labels_file = Path("configs/github/labels.yaml")
+if labels_file.is_file():
+    try:
+        labels_doc = yaml.safe_load(labels_file.read_text())
+    except yaml.YAMLError as exc:
+        problems.append(f"{labels_file}: invalid YAML: {exc}")
+        labels_doc = None
+    if isinstance(labels_doc, dict):
+        canonical = set()
+        for entry in labels_doc.get("labels", []):
+            if isinstance(entry, dict):
+                canonical.add(str(entry.get("name", "")).strip())
+        for form in forms:
+            try:
+                form_doc = yaml.safe_load(form.read_text())
+            except yaml.YAMLError:
+                continue  # already reported above
+            if not isinstance(form_doc, dict):
+                continue
+            declared = form_doc.get("labels", [])
+            if not isinstance(declared, list):
+                problems.append(f"{form}: top-level 'labels' must be a list")
+                continue
+            for label in declared:
+                if str(label).strip() not in canonical:
+                    problems.append(f"{form}: label {label!r} is not in the canonical label set ({labels_file})")
+
 config = Path(".github/ISSUE_TEMPLATE/config.yml")
 if not config.is_file():
     problems.append(".github/ISSUE_TEMPLATE/config.yml is missing (the issue chooser needs it)")
