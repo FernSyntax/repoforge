@@ -81,24 +81,33 @@ does (spec.md §14.6).
 3. **Automated, on the tag.**
    - `Release Validation` re-runs `scripts/release-check.sh` against
      the tagged commit and must pass before anything is published.
-   - `Release` runs GoReleaser: static version-stamped binaries for the
-     supported matrix, `checksums.txt` (SHA-256), one SPDX SBOM per
-     archive, and a build-provenance attestation over the checksum
-     file. The GitHub release is created with the changelog section as
+   - `Release` stages, verifies, then publishes — in that order, and
+     never out of it. The tagged commit resolves to exactly one state:
+     no release (stage a draft), a draft on this commit (resume it), a
+     draft from another commit (fail for a human), or an already
+     published release (fail; releases are immutable). Assets are
+     uploaded missing-only, never overwritten; then the staged draft is
+     verified completely — exact asset set, real checksum verification,
+     attestation over every archive — while it is still a draft. Only
+     the verified draft is flipped public, and the flip is confirmed,
+     not assumed. The GitHub release carries the changelog section as
      notes.
    - `Template Publication` builds the template from the tagged source
      with immutable provenance and publishes it. See
      [operations/template-publication.md](../operations/template-publication.md).
-4. **Verify.** Confirm the artifacts correspond to the tagged commit:
-
-   ```sh
-   sha256sum -c checksums.txt
-   gh attestation verify repoforge_X.Y.Z_Linux_amd64.tar.gz --repo FernSyntax/repoforge
-   ```
+4. **Verify.** Confirm the artifacts correspond to the tagged commit
+   by following [release-integrity.md](../security/release-integrity.md):
+   download the assets, verify checksums (with `--ignore-missing` when
+   fetching a subset), verify the attestation for the archive being
+   installed, and confirm the binary reports its own version. Archive
+   names use lowercase OS spellings (`repoforge_X.Y.Z_linux_amd64.tar.gz`,
+   never `Linux`).
 
 5. **Failure handling.** If a release fails partway, no release exists.
    Investigate, correct the candidate locally, delete nothing, and
-   re-run. There is no corrective commit after publication (spec.md §14.6).
+   re-run: a re-run resumes the staged draft (or stages one) and
+   re-verifies from scratch, so partial progress is never lost and never
+   trusted. There is no corrective commit after publication (spec.md §14.6).
 
 ## Relationships
 

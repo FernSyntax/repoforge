@@ -9,9 +9,12 @@
 # 1. `validate` proves the tag is strict SemVer, annotated, present in
 #    CHANGELOG.md, and that the tagged commit passes the repository's own
 #    checks. A failure here stops the pipeline before any artifact exists.
-# 2. `release` builds the binaries, extracts the release notes from
-#    CHANGELOG.md, publishes the GitHub release, uploads the assets, and
-#    attests build provenance over the checksum file.
+# 2. `release` builds the binaries, stages a DRAFT release, uploads only
+#    missing assets, attests build provenance, verifies everything, and
+#    publishes last. A failure anywhere before the final step leaves a
+#    resumable draft, never a partial public release; a retry resumes it
+#    when the tag still targets the same commit, and fails closed
+#    otherwise. A tag that already has a public release is never touched.
 #
 # Template Publication is a separate workflow triggered by
 # `workflow_run` on this workflow's successful completion, so the App
@@ -153,41 +156,92 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Release creation is explicit and verified rather than a
-      # GoReleaser side effect, so a tag that already has a release
-      # cannot be silently reused and the asset list is checked.
-      - name: Check the release does not already exist
+      # GoReleaser side effect. Publication goes through a recoverable
+      # draft state machine instead of creating a public release first:
+      #
+      #   resolve state → ensure draft → upload missing assets only →
+      #   attest → verify everything → publish last
+      #
+      # A tag that already has a PUBLIC release is never touched: the
+      # release is immutable, so the run fails closed. A DRAFT from the
+      # same tag and commit is resumed, never recreated. A retry therefore
+      # completes safely, and can never overwrite artifacts, reuse a
+      # different source commit, or accept an incomplete release.
+      - name: Resolve the release state
+        id: relstate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            echo "::error::release ${GITHUB_REF_NAME} already exists; a tag is never reused or moved" >&2
+          set -euo pipefail
+          head_sha=$(git rev-parse HEAD)
+          echo "tag ${GITHUB_REF_NAME} at $head_sha"
+          # No release at all: a fresh run. Anything below creates state.
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "state=absent" >> "$GITHUB_OUTPUT"
+            echo "no release for ${GITHUB_REF_NAME}; a draft will be staged"
+            exit 0
+          fi
+          # A release exists. Published releases are immutable — the run
+          # ends here rather than touching it. Only drafts may resume.
+          if [ "$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq .isDraft)" != "true" ]; then
+            echo "::error::release ${GITHUB_REF_NAME} is already published; published releases are immutable and a tag is never reused or moved" >&2
             exit 1
           fi
-          echo "release tag ${GITHUB_REF_NAME} is unused"
+          # A draft resumes only when it belongs to this exact source: the
+          # tag must still dereference to the checked-out commit. A draft
+          # whose tag moved (or that was made for another commit) is
+          # contradictory state, not something to adopt — fail closed and
+          # leave it for a human, never delete or rewrite it here.
+          draft_sha=$(git rev-parse --verify --quiet "${GITHUB_REF_NAME}^{commit}") || {
+            echo "::error::cannot resolve tag ${GITHUB_REF_NAME} to a commit" >&2
+            exit 1
+          }
+          if [ "$draft_sha" != "$head_sha" ]; then
+            echo "::error::draft release ${GITHUB_REF_NAME} targets $draft_sha, but this run builds $head_sha; refusing to resume a draft from a different source commit" >&2
+            exit 1
+          fi
+          echo "state=resume" >> "$GITHUB_OUTPUT"
+          echo "resuming draft release ${GITHUB_REF_NAME} for $head_sha"
 
-      - name: Create the release with the CHANGELOG.md notes
+      - name: Ensure the draft release exists
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "draft release ${GITHUB_REF_NAME} already present; resuming without recreating"
+            exit 0
+          fi
           gh release create "${GITHUB_REF_NAME}" \
             --title "${GITHUB_REF_NAME}" \
             --notes-file "${RUNNER_TEMP}/notes/notes.md" \
-            --verify-tag
-          echo "created release ${GITHUB_REF_NAME}"
+            --verify-tag \
+            --draft
+          echo "staged draft release ${GITHUB_REF_NAME}; nothing is public yet"
 
-      - name: Upload the release assets
+      - name: Upload the missing release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # checksums.txt binds every released file by hash; the SBOMs
-          # and archives are each also listed in it.
-          gh release upload "${GITHUB_REF_NAME}" dist/checksums.txt dist/*.tar.gz dist/*.zip dist/*.sbom.json
-          count=$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets | length')
-          echo "uploaded $count assets"
-          if [ "$count" -lt 11 ]; then
-            echo "::error::expected at least 11 assets (5 archives, 5 SBOMs, checksums.txt), found $count" >&2
-            exit 1
-          fi
+          # Uploads only what is absent. Existing assets are never
+          # overwritten, so a retry cannot replace a good file with a bad
+          # rebuild — and a draft carrying files from a different source
+          # is caught by the exact-set check below instead of being
+          # silently adopted.
+          set -euo pipefail
+          have=$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')
+          for f in dist/checksums.txt dist/*.tar.gz dist/*.zip dist/*.sbom.json; do
+            # A missing glob expands to itself when nullglob is off; skip
+            # patterns that matched nothing (e.g. no .zip on some matrix).
+            [ -e "$f" ] || continue
+            name=$(basename "$f")
+            if printf '%s\n' "$have" | grep -qxF "$name"; then
+              echo "already present: $name (leaving untouched)"
+            else
+              echo "uploading: $name"
+              gh release upload "${GITHUB_REF_NAME}" "$f"
+            fi
+          done
 
       # SLSA build provenance over the checksum file: every archive and
       # SBOM becomes an attestation subject by digest. Separate SBOM
@@ -197,15 +251,86 @@ jobs:
         with:
           subject-checksums: dist/checksums.txt
 
-      - name: Verify the published release
+      - name: Verify the staged release completely
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # checksums.txt lists bare file names, so the check must run
-          # from inside dist/. Resolving them against the repository root
-          # reports "FAILED open or read" for every asset that is
-          # perfectly intact — which is exactly what happened before this
-          # was corrected.
+          set -euo pipefail
+          # Every check below must pass while the release is still a
+          # draft. Publication is a separate, later step — nothing here
+          # makes anything public.
+          #
+          # 1. Exact asset set. The expectation is derived from
+          # checksums.txt itself — the file GoReleaser wrote to bind
+          # every artifact it produced — plus checksums.txt, so the
+          # check needs no hardcoded count and cannot rot when the
+          # matrix changes. An unexpected extra file is as wrong as a
+          # missing one.
+          expected=$(awk '{print $2}' dist/checksums.txt; echo "checksums.txt")
+          expected=$(printf '%s\n' "$expected" | sort -u)
+          actual=$(gh release view "${GITHUB_REF_NAME}" --json assets --jq -r '.assets[].name' | sort -u)
+          if [ "$expected" != "$actual" ]; then
+            echo "::error::asset set mismatch on draft ${GITHUB_REF_NAME}" >&2
+            echo "--- expected (from dist/checksums.txt) ---" >&2
+            echo "$expected" >&2
+            echo "--- actual (on the release) ---" >&2
+            echo "$actual" >&2
+            exit 1
+          fi
+          echo "asset set matches dist/checksums.txt exactly ($(printf '%s' "$actual" | wc -l) files)"
+          #
+          # 2. Archive integrity: every file verifies against the
+          # published checksum file. checksums.txt lists bare file names,
+          # so the check runs from inside dist/.
           (cd dist && sha256sum -c checksums.txt)
+          #
+          # 3. Every archive has its SBOM sidecar and vice versa.
+          for a in dist/*.tar.gz dist/*.zip; do
+            [ -e "$a" ] || continue
+            if [ ! -e "$a.sbom.json" ]; then
+              echo "::error::archive $(basename "$a") has no SBOM sidecar" >&2
+              exit 1
+            fi
+          done
+          for s in dist/*.sbom.json; do
+            [ -e "$s" ] || continue
+            base=${s%.sbom.json}
+            if [ ! -e "$base" ]; then
+              echo "::error::SBOM $(basename "$s") has no matching archive" >&2
+              exit 1
+            fi
+          done
+          echo "every archive has an SBOM sidecar and vice versa"
+          #
+          # 4. Build-provenance attestation verifies for every archive.
+          # A missing or invalid attestation fails here, while the
+          # release is still a draft — never after publication.
+          for a in dist/*.tar.gz dist/*.zip; do
+            [ -e "$a" ] || continue
+            gh attestation verify "$a" --repo "$GITHUB_REPOSITORY" >/dev/null
+            echo "attestation verifies: $(basename "$a")"
+          done
+          #
+          # 5. The draft still targets this commit and is still a draft.
+          # Anything else means something moved underneath the run.
+          if [ "$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq .isDraft)" != "true" ]; then
+            echo "::error::release ${GITHUB_REF_NAME} is no longer a draft; refusing to proceed" >&2
+            exit 1
+          fi
+          echo "draft ${GITHUB_REF_NAME} fully verified; ready to publish"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The single, explicit, last mutation: flip the verified draft
+          # public. Everything above proved the content; this step only
+          # changes visibility.
+          set -euo pipefail
+          gh release edit "${GITHUB_REF_NAME}" --draft=false
+          if [ "$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq .isDraft)" != "false" ]; then
+            echo "::error::release ${GITHUB_REF_NAME} did not publish; isDraft is not false" >&2
+            exit 1
+          fi
           gh release view "${GITHUB_REF_NAME}" --json tagName,isDraft,assets \
             --jq '{tag: .tagName, draft: .isDraft, assets: (.assets|length)}'
