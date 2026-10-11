@@ -44,6 +44,7 @@ var requiredFiles = []string{
 	"SECURITY.md",
 	"SUPPORT.md",
 	"AGENTS.md",
+	"DESIGN.md",
 	"spec.md",
 	".editorconfig",
 	".gitattributes",

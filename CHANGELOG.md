@@ -12,6 +12,13 @@ history: there is no earlier version of *this* product to record.
 
 ### Added
 
+- **Agentic framework.** Root `AGENTS.md` rewritten as the agent
+  operating contract and root `DESIGN.md` added as the thin front
+  door to design authority; `template/AGENTS.md` brought to parity
+  with a matching `template/DESIGN.md` so generated repositories
+  inherit the framework. `repoforge validate` now covers the agent
+  files (presence plus cross-references), so drift fails locally
+  and in CI. See ADR-0013.
 - **Enforced local gates and thin `gh` wrappers.** `repoforge hook
   install|verify|uninstall` is the CLI entry point over the hook
   installer; `repoforge pr create` and `repoforge issue create` run

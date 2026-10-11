@@ -21,6 +21,7 @@ func writeFixture(t *testing.T, dir string) {
 		"SECURITY.md":                      "# Security\n",
 		"SUPPORT.md":                       "# Support\n",
 		"AGENTS.md":                        "# Agents\n",
+		"DESIGN.md":                        "# Design\n",
 		".editorconfig":                    "root = true\n",
 		".gitattributes":                   "* text=auto eol=lf\n",
 		".gitignore":                       "/dist/\n",
