@@ -148,13 +148,29 @@ Reference: [docs/reference/cli.md](docs/reference/cli.md).
 
 ## Installation
 
-Prebuilt static binaries for linux, macOS, and Windows on amd64 and
-arm64 are attached to every release:
+Prebuilt static binaries are attached to every release. Supported
+build matrix: Linux and macOS on amd64 and arm64; Windows on amd64
+only. Archive names use lowercase OS spellings, exactly as emitted:
 
 ```sh
-# https://github.com/FernSyntax/repoforge/releases/latest
-sha256sum -c checksums.txt
-gh attestation verify repoforge_0.1.0_Linux_amd64.tar.gz --repo FernSyntax/repoforge
+TAG=v0.1.0
+gh release download "$TAG" --repo FernSyntax/repoforge \
+  repoforge_0.1.0_linux_amd64.tar.gz \
+  repoforge_0.1.0_linux_amd64.tar.gz.sbom.json \
+  checksums.txt --dir ./repoforge-dist
+cd ./repoforge-dist
+
+# Verify integrity. --ignore-missing covers exactly the files
+# downloaded: checksums.txt lists every release asset, so a plain
+# `sha256sum -c` would fail on the files not fetched.
+sha256sum --ignore-missing -c checksums.txt
+
+# Verify build provenance for the archive being installed.
+gh attestation verify repoforge_0.1.0_linux_amd64.tar.gz --repo FernSyntax/repoforge
+
+# Extract and confirm the binary reports its own version.
+tar -xzf repoforge_0.1.0_linux_amd64.tar.gz repoforge
+./repoforge version
 ```
 
 Or build from source (the `go` directive in `go.mod` is the floor):

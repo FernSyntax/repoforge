@@ -17,8 +17,11 @@ history: there is no earlier version of *this* product to record.
   section and the issue link pre-placed; `repoforge pr ready --file`
   is the single local gate (branch readiness plus body contract) —
   green means every deterministic CI check will pass.
-  `repoforge issue scaffold` / `repoforge issue check` do the same
+  `repoforge issue scaffold` / `issue check` do the same
   for the issue forms. See ADR-0011.
+
+Hardens the release and template-publication path without changing what
+v0.1.0 shipped. No tag, release, or asset is modified.
 
 ### Fixed
 
@@ -26,6 +29,21 @@ history: there is no earlier version of *this* product to record.
   the body from the frozen triggering event payload, so re-running a
   failed run re-checked the original body forever. It now fetches the
   live body; a fetch failure fails the run.
+- **Release publishes only after verification.** The `Release` workflow
+  now stages a draft, uploads missing assets without overwriting,
+  verifies the complete staged draft (exact asset set, real checksum
+  verification, attestation over every archive), and only then flips
+  the draft public with the flip confirmed. Re-running resumes the
+  staged draft; a published release fails the run instead of being
+  touched.
+- **Publication concurrency is keyed on the release.** The
+  `Template Publication` concurrency group is
+  `template-publication-<tag>` with `cancel-in-progress: false`, so a
+  later run for a different release can never kill an active
+  publication.
+- **Archive names use lowercase OS spellings.** The GoReleaser matrix
+  and every documented asset name now agree
+  (`repoforge_X.Y.Z_linux_amd64.tar.gz`, never `Linux`).
 
 ## [0.1.0] — 2026-10-10
 
