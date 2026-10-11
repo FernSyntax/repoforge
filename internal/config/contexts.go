@@ -72,3 +72,36 @@ func runsOnPullRequest(on any) bool {
 	}
 	return false
 }
+
+// CodeScanningCheckContexts derives the status check contexts that
+// CodeQL default setup emits for this repository, deterministically and
+// locally: a Go module ("Analyze (go)") and GitHub Actions workflow
+// files ("Analyze (actions)", which default setup analyzes for any
+// repository carrying workflows).
+//
+// These contexts are only useful when the policy requires code
+// scanning; requiring them otherwise would block every merge with a
+// check that never reports. Callers therefore gate this function on the
+// contract's security.code_scanning setting.
+//
+// Detection is deliberately local, matching DiscoverCheckContexts: a
+// repository that adds another CodeQL language must add its context
+// here (docs/reference/limitations.md).
+func CodeScanningCheckContexts(root string) []string {
+	var out []string
+	if info, err := os.Stat(filepath.Join(root, "go.mod")); err == nil && !info.IsDir() {
+		out = append(out, "Analyze (go)")
+	}
+	if entries, err := os.ReadDir(filepath.Join(root, ".github", "workflows")); err == nil {
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() || !(strings.HasSuffix(name, ".yml") || strings.HasSuffix(name, ".yaml")) {
+				continue
+			}
+			out = append(out, "Analyze (actions)")
+			break
+		}
+	}
+	sort.Strings(out)
+	return out
+}

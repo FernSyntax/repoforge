@@ -20,8 +20,8 @@ to the GitHub API (spec.md §7).
 | File | Role |
 | ---- | ---- |
 | `configs/github/repository.yaml` | Baseline: plan-independent repository and merge settings every managed repository shares. No rulesets (unavailable on Free-plan private repos). |
-| `configs/github/solo.yaml` | Profile for one maintainer: PR flow with `required_approvals: 0`, status checks, conversation resolution, linear history, ref protection, security features required where free. |
-| `configs/github/team.yaml` | Profile for teams: 1 approval, stale-review dismissal, conversation resolution, code-owner review, all security features required. |
+| `configs/github/solo.yaml` | Profile for one maintainer: PR flow with `required_approvals: 0`, status checks, conversation resolution, linear history, ref protection, security features required where free. Deliberately below the OpenSSF Scorecard Branch-Protection bar: a single maintainer cannot supply a non-author approval, and the standard does not pretend otherwise. |
+| `configs/github/team.yaml` | Profile for teams: 1 approval, stale-review dismissal, last-push approval, conversation resolution, code-owner review, all security features required. This is the scorecard-maximal branch-protection shape. |
 | `configs/github/strict.yaml` | High-assurance profile: 2 approvals, last-push approval, signed commits, linear history, metadata restrictions, SemVer tag shape (the pattern rules are Enterprise-plan: declared as intent, not realized in the canonical payloads below). |
 | `configs/github/rulesets/{main-solo,main-team,main-strict,tags}.json` | Canonical ruleset payloads: the exact create/update bodies bootstrap applies and doctor audits, validated against the documented ruleset request schema. The profile's `rulesets` section must agree with them; `configs/rulesets_test.go` cross-checks. |
 | `schemas/github-governance.schema.yaml` / `.json` | v1 schema (canonical/derived) all four configs validate against. |
@@ -130,13 +130,16 @@ construction). Constants: `configs.MainRulesetName`,
 Desired state lives in `configs/github/rulesets/*.json` (canonical
 payloads). `configs.DesiredRulesets` layers two repository-specific
 overlays on top: required status-check contexts discovered from the
-job names of workflows that run on pull requests (the
-`required_status_checks` rule is
-dropped when no contexts exist) and `pull_request.allowed_merge_methods`
-derived from the contract merge settings. Bootstrap and doctor both
-compose their wants through it, so they always answer from the same
-desired state; `configs/rulesets_test.go` cross-checks that each
+job names of workflows that run on pull requests, plus — when the
+contract requires code scanning — the CodeQL default-setup analysis
+contexts for the languages the repository declares (`Analyze (go)`
+for a Go module, `Analyze (actions)` for workflow files), and
+`pull_request.allowed_merge_methods` derived from the contract merge
+settings. The `required_status_checks` rule is dropped when no
+contexts exist; `configs/rulesets_test.go` cross-checks that each
 governance profile document agrees with its canonical payload.
+Bootstrap and doctor both compose their wants through it, so they
+always answer from the same desired state.
 
 Ownership of a named ruleset is total: bootstrap's update replaces the
 ruleset wholesale, so drift is any difference in `enforcement`,

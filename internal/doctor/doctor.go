@@ -120,7 +120,11 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 
 	var wantMain, wantTags *ghub.RulesetPayload
 	if pol != nil {
-		wantMain, wantTags, err = configs.DesiredRulesets(pol.GovernanceProfileName(), config.DiscoverCheckContexts(root), pol.MergeMethods())
+		contexts := config.DiscoverCheckContexts(root)
+		if pol.Security.CodeScanning {
+			contexts = append(contexts, config.CodeScanningCheckContexts(root)...)
+		}
+		wantMain, wantTags, err = configs.DesiredRulesets(pol.GovernanceProfileName(), contexts, pol.MergeMethods())
 		if err != nil {
 			return rep, err
 		}

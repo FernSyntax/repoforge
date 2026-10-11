@@ -58,16 +58,19 @@ source of truth for settings.
 ## CI trust boundaries
 
 The dangerous direction is write access meeting untrusted code.
-The baseline holds three lines:
+The baseline holds four lines:
 
 1. **Tokens are least-privilege.** Every workflow sets top-level
    `permissions: {}` and each job declares exactly what it needs.
    Jobs that execute pull-request-   controlled code (`tests`,
    validation, secret detection) hold `contents: read` and nothing
-   else. The only write in the baseline is the Scorecard SARIF upload
-   to code scanning. There are no
-   repository secrets configured at all — nothing to exfiltrate by
-   design.
+   else. The only writes in the baseline are the Scorecard SARIF
+   upload to code scanning, the release job (publishing the release,
+   minting and storing attestations), and the publication and
+   preflight jobs (minting a GitHub App installation token, which
+   requires id-token: write — the actual content writes are carried
+   by that token, not by the workflow grant). Everything else is
+   read-only.
 2. **Checkouts do not persist credentials**
    (`persist-credentials: false`): the automatic token never reaches
    git config, so a compromised build step cannot push with it even
@@ -76,12 +79,23 @@ The baseline holds three lines:
    controlled code with a privileged token. Nothing in the baseline
    needs it: dependency review reads the PR diff through the API,
    and every other PR job is content with a read-only token.
+4. **The build and the credential are separate jobs.** Template
+   publication splits into an unprivileged `build` job that executes
+   the release source (`contents: read`, no secrets, no id-token) and
+   a privileged `publish` job that executes only default-branch engine
+   code plus the verified artifact (ADR-0014, spec.md §14.3.3). The
+   App private key never coexists with the execution of release-source
+   code, and no checkout ref in that workflow carries an event
+   expression: the release identity is resolved through the API and
+   passed as data.
 
 A machine check pins these lines down: `internal/validate`
 rejects unpinned actions (spec.md §8.6), and the permissions baseline
 (top-level empty, per-job explicit, no write except the Scorecard
 SARIF upload, no `pull_request_target`) is asserted by
 `internal/validate/security_test.go` over the real workflow files.
+The publication privilege split is asserted by
+`TestPublicationSeparatesBuildFromPublish`.
 
 ## GitHub token permissions
 
@@ -93,6 +107,10 @@ SARIF upload, no `pull_request_target`) is asserted by
 | Scorecard | `contents: read`, `security-events: write` | Checkout + SARIF upload (results are not published, so no `id-token`) |
 | Secret Detection | `contents: read` | Full-history checkout + local scan |
 | Release Validation | `contents: read` | Tag/changelog inspection + throwaway build |
+| Release (publish) | `contents: write`, `id-token: write`, `attestations: write` | Publish the release and its build-provenance attestations |
+| Template Publication — build | `contents: read` | Execute the release source; holds no credential (ADR-0014) |
+| Template Publication — publish | `contents: read`, `id-token: write`, `actions: read` | Mint the App installation token and publish with it |
+| Template Preflight | `contents: read`, `id-token: write`, `actions: read` | Prove the App and its installation scope |
 
 Credentials resolve `GH_TOKEN` → `GITHUB_TOKEN` → the authenticated
 `gh` CLI (spec.md §8.1). Tokens are held unexported, never stored, and

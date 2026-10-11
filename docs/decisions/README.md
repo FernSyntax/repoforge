@@ -21,6 +21,8 @@ normative from the moment it merges.
 | [0011](0011-agent-proof-pr-and-issue-gates.md) | Agent-proof pull request and issue gates | amended by 0012 | §20.2, §20.3 |
 | [0012](0012-enforced-gates-and-gh-wrappers.md) | Enforced local gates and thin gh wrappers | accepted | P9, §6.8, §14, §20 |
 | [0013](0013-agentic-framework.md) | The agentic framework — AGENTS.md, DESIGN.md, and validated agent files | accepted | §13, §20 |
+| [0014](0014-publication-privilege-separation.md) | Publication privilege separation — build without the credential | accepted | §14.3.3, §18.4 |
+| [0015](0015-team-profile-maximal-and-gated-sast.md) | Scorecard-maximal team profile and gated SAST checks | accepted | §7.6, §8 |
 
 `spec.md` in each link is the root specification.
 

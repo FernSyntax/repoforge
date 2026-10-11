@@ -46,6 +46,7 @@ skipped and never described as enforced.
 | `Contents: write` is not sufficient to commit workflow files | Workflow-file commits require `Workflows: write`. The publishing App requests both, and the runbook explains why. |
 | Listing secret names does not validate a private key | Only minting an installation token proves the key works, which is why the preflight mints one. |
 | Template repositories start with a fresh, unrelated history | A repository created from a GitHub template has no shared history with the template. This is documented rather than worked around. |
+| CodeQL default setup names its analyses `Analyze (<language>)` | The required status checks include these contexts when the policy requires code scanning. Detection is local and covers the two languages the standard carries: Go (`go.mod`) and GitHub Actions workflows (`Analyze (actions)`, which default setup runs for any repository with workflows). A repository that adds another CodeQL language must add its context to `config.CodeScanningCheckContexts` (internal/config/contexts.go); until it does, that language's analysis runs but does not gate merges. |
 | `act` is local emulation only | It does not prove hosted secrets, permissions, runners, attestations, or remote API behaviour. |
 
 ## Verification limits

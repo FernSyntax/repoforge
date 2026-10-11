@@ -180,6 +180,12 @@ func planRulesets(root string, pol *config.Policy, gov *config.Governance, actua
 	}
 
 	contexts := config.DiscoverCheckContexts(root)
+	if pol.Security.CodeScanning {
+		// CodeQL default setup's analyses are required checks too: a
+		// repository whose policy requires SAST must also require the
+		// checks that run it, or the scan never gates a merge.
+		contexts = append(contexts, config.CodeScanningCheckContexts(root)...)
+	}
 	if len(contexts) == 0 {
 		add(ActionReport, "status checks", "no CI job contexts discovered; required_status_checks rule omitted", nil)
 	}
