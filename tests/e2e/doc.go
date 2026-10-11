@@ -1,3 +1,7 @@
+// Copyright the repoforge contributors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Package e2e is the explicit end-to-end harness for disposable GitHub
 // repositories. It exercises the full product loop — create from
 // template, govern, drift, reconcile, PR flow, merge, cleanup —

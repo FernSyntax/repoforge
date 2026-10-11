@@ -1,3 +1,7 @@
+// Copyright the repoforge contributors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Package config loads and validates the declarative RepoForge
 // repository policy. Loading is strict (spec.md §9.2): unknown fields,
 // trailing content, and unknown schema versions are all rejected, and
