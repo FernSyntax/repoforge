@@ -218,6 +218,13 @@ In scope:
 7.5. Convergence MUST be achieved with the minimum set of API calls:
      compare before mutate, and mutate only on actual drift.
 
+7.6. When the contract requires code scanning, the desired main
+     ruleset MUST include the CodeQL default-setup analysis contexts as
+     required status checks (docs/architecture/github-governance.md).
+     A SAST that runs but does not gate merges does not satisfy the
+     security model: the analysis must be required for every change,
+     which is what blocks a merge on a finding.
+
 ## 8. Security model
 
 8.1. **Credential sources.** In priority order: `GH_TOKEN`, then
