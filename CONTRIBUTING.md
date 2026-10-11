@@ -77,6 +77,44 @@ instructions and the run fails — it is never skipped silently.
 The same checks run in CI as required status checks. CI is authoritative:
 local checks are developer feedback and can be bypassed.
 
+## Test policy
+
+A major change must add or update automated tests in the same change.
+A change is major when it alters behavior, changes policy or schema,
+touches a security boundary, or fixes a regression. Every regression
+fix in this repository carries a test that fails without the fix —
+that is the house style, not an aspiration.
+
+A change with no new or updated tests must say so in the pull request,
+with the reason (for example: documentation-only, or the behavior is
+already covered by an existing test the change references). "Tests
+come later" is not an accepted reason; the pull request gates require
+the statement, so an empty answer fails the gate.
+
+## Dependency and scan policy
+
+Static and compositional analysis runs on every pull request as
+required status checks: CodeQL default setup (`Analyze (go)` and
+`Analyze (actions)`), dependency review, `govulncheck`, and secret
+detection. The remediation thresholds:
+
+- **Error-severity SAST findings block merge.** Warnings are fixed or
+  justified in the pull request within one release. A finding that is a
+  false positive is dismissed with a recorded justification in the
+  code-scanning dashboard — never silenced globally, and never with
+  `--no-verify`.
+- **High- or critical-severity dependency vulnerabilities block merge
+  and release.** Medium findings get a documented exception with an
+  expiry date; low findings are triaged on a monthly cadence.
+- **Release gating.** `scripts/release-check.sh` runs on every pushed
+  tag and refuses to proceed on a failing validation run, so a release
+  cannot ship over a red check.
+
+Rotating an action pin or upgrading a dependency is a security-relevant
+change: review it as one, in its own pull request (see
+[docs/architecture/security.md](docs/architecture/security.md) →
+"Dependency pinning guidance").
+
 ## Developer hooks
 
 ```sh

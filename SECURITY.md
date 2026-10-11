@@ -58,3 +58,48 @@ upstream), or requiring physical access to your machine.
 - It never stores credentials. If you believe a token was exposed
   through this tool: **revoke it immediately** (GitHub Settings →
   Applications / Tokens), then report the issue privately as above.
+
+## Secrets and credentials (maintainer policy)
+
+The repository holds exactly two secrets, both GitHub Actions
+repository secrets:
+
+- `REPOFORGE_APP_ID` — the identifier of the dedicated GitHub App that
+  publishes the generated template repository.
+- `REPOFORGE_APP_PRIVATE_KEY` — that App's private key.
+
+Policy:
+
+- **Storage.** Secrets live only in GitHub Actions secrets. They are
+  never committed, never passed through the CLI, and never written to
+  disk, logs, or error output (spec.md §8.2). `repoforge validate`
+  rejects token- and key-shaped material in the repository.
+- **Access.** The App private key is referenced by exactly one step,
+  in exactly one job, of exactly one workflow: the `publish` job of
+  `.github/workflows/template-publication.yml`, which mints an
+  installation token scoped to the template repository alone (ADR-0014,
+  spec.md §18.4). No other workflow receives it. The build job of the
+  same workflow, which executes release-source code, holds no secrets
+  and no id-token.
+- **Rotation.** Rotating or revoking the App is a documented,
+  reversible procedure: see "Rotating or revoking" in
+  `docs/operations/template-publication.md`. A suspected key exposure
+  means revoke first, then report privately as above.
+- **Scope.** The App requests no administration permission. Its token
+  carries contents, workflows, pull-requests, and checks scoped to the
+  template repository alone.
+
+## Collaborator access
+
+Collaborators are granted access only after review, never on request:
+
+- A candidate is proposed in a linked issue that states the person's
+  role and the minimum access the role requires.
+- The issue is reviewed and closed by a maintainer before any
+  collaborator invitation is sent.
+- Invited collaborators receive the minimum role that covers the work —
+  typically write, never administration, never maintain.
+- Access is removed when the role ends, in the same reviewed way it
+  was granted.
+
+No collaborator has ever been added without this process.

@@ -5,7 +5,9 @@ and does not promise — about managed repositories. The normative
 behavior contract is [spec.md](../../spec.md); this document
 explains. For plan-dependent behavior, see
 [github-capabilities.md](../reference/github-capabilities.md) and
-[github-governance.md](github-governance.md).
+[github-governance.md](github-governance.md). The project's OpenSSF
+Baseline conformance, control by control, is
+[osps-baseline.md](../security/osps-baseline.md).
 
 ## Threat model
 
