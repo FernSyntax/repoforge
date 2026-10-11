@@ -4,15 +4,33 @@
 # publishing credential. It runs only when the Release workflow has
 # succeeded (`workflow_run`), or on manual dispatch against an existing,
 # validated release tag. It never runs on a branch and never on a pull
-# request, so untrusted code cannot reach the App private key.
+# request.
 #
 # The App private key and the installation token are available to no
 # other workflow. Pull-request workflows never receive them.
 #
-# Same-tag, same-SHA dependency: the publish job verifies that the
-# triggering run targeted the release tag and that the engine release
-# for that tag exists and matches HEAD, so a publication can never be
-# made from an unvalidated branch or a stale run.
+# Two jobs, one trust boundary. `build` executes the release source and
+# holds no credential at all: contents: read, no secrets, no id-token.
+# `publish` holds the credential and executes only trusted code — the
+# engine from the default branch, plus the artifact `build` produced
+# and verified. The private key therefore never coexists with the
+# execution of release-source code, which is the property this workflow
+# previously only claimed in its header. Everything `publish` learns
+# about the release identity is re-derived from the API and from the
+# manifest with trusted tooling, before any credential exists.
+#
+# The checkout in `build` is pinned to the commit the release tag
+# resolves to, passed as resolved data through a step output. It is
+# never an event expression: `workflow_run`'s head_sha is
+# attacker-influenceable in the scanners' model, and a ref derived from
+# it is exactly what puts a credential beside untrusted code. Resolved
+# data carries the same value without that shape.
+#
+# Same-tag, same-SHA dependency: the build job verifies that the
+# release for the triggering tag exists and resolves to the exact
+# commit being built, so a publication can never be made from an
+# unvalidated branch or a stale run. The publish job re-derives the
+# same identity through the API before it publishes.
 #
 # The destination is fixed: FernSyntax/repoforge-template. Manual
 # dispatch cannot broaden it, because a publishing credential scoped to
@@ -54,51 +72,37 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  build:
     # The workflow_run trigger only counts on success.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    # Unprivileged by construction: this job executes the release
+    # source, so it must hold nothing an attacker could want. No
+    # secrets, no id-token; contents: read is the only grant, enough to
+    # clone the repository and read its release metadata.
     permissions:
       contents: read
-      id-token: write
-      actions: read
     env:
       # The single allowed destination. Not an input.
       TARGET: FernSyntax/repoforge-template
     outputs:
-      mode: ${{ steps.target.outputs.mode }}
-      source-commit: ${{ steps.target.outputs.source-commit }}
-      manifest-digest: ${{ steps.target.outputs.manifest-digest }}
+      tag: ${{ steps.source.outputs.tag }}
+      source-commit: ${{ steps.source.outputs.source-commit }}
+      manifest-digest: ${{ steps.build.outputs.manifest-digest }}
     steps:
-      # The checkout is pinned to the release identity, not the default
-      # branch. For `workflow_run`, `head_sha` is the exact commit the
-      # successful Release run built; for manual dispatch, the tag is
-      # resolved to its commit by the next step and anything that does
-      # not match is rejected before any credential exists. Without this,
-      # a commit landing on main after the tag would silently become the
-      # published source.
-      #
-      # Trusted ref note: in both trigger modes GitHub runs THIS workflow
-      # file from the default branch, never from the tag. The tag only
-      # ever supplies data (the commit to build), never code.
-      - name: Checkout the tagged source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-          ref: ${{ github.event.workflow_run.head_sha || inputs.tag }}
-
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-
       # -----------------------------------------------------------------
       # Resolve the immutable source: the release tag, its annotated tag
-      # object, and the commit it points at. Manual dispatch must name an
-      # existing release; a branch or an arbitrary ref is refused.
+      # object, and the commit it points at. This runs before anything
+      # is checked out, entirely through the API, so the release
+      # identity is fixed before any code runs.
+      #
+      # The tag must already exist as a release: manual dispatch
+      # publishes an existing validated release, never a ref the
+      # pipeline has not vetted. The ref must be an ANNOTATED tag
+      # object: a lightweight tag's ref points straight at a commit,
+      # which the release policy (R3) forbids.
       # -----------------------------------------------------------------
       - name: Resolve the release tag and its commit
         id: source
@@ -119,10 +123,6 @@ jobs:
             *) echo "::error::source '$tag' is not a vMAJOR.MINOR.PATCH release tag" >&2; exit 1 ;;
           esac
 
-          {
-            echo "tag=$tag"
-          } >> "$GITHUB_OUTPUT"
-
           # The release must already exist: manual dispatch publishes an
           # existing validated release, never a ref the pipeline has not
           # vetted.
@@ -132,67 +132,98 @@ jobs:
           fi
           echo "engine release $tag exists"
 
-          # Same-SHA check: the tag must dereference to the commit that is
-          # checked out.
+          # The tag object is the authoritative reference. The ref's
+          # object type is the annotation: an annotated tag's ref points
+          # at a tag object (which points at the commit), a lightweight
+          # tag's ref points straight at the commit.
           #
-          # Comparing the release's targetCommitish against
-          # `git rev-parse HEAD` cannot work, and silently never matches:
-          # for a release created from a tag, GitHub reports that field as
-          # the BRANCH the tag sits on ("main"), not as a SHA. The check
-          # then compares a branch name with a digest and fails on every
-          # run while looking like a legitimate guard.
-          #
-          # The tag object is the authoritative reference, and it is
-          # already in the checkout because the workflow was triggered
-          # by it.
-          if ! commit=$(git rev-parse --verify --quiet "$tag^{commit}"); then            # Fall back to the API when the tag is not in the local
-            # checkout, dereferencing an annotated tag object explicitly:
-            # the ref points at the tag object, which points at the commit.
-            ref_type=$(gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" --jq '.object.type' 2>/dev/null || echo "")
-            ref_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" --jq '.object.sha' 2>/dev/null || echo "")
-            case "$ref_type" in
-              tag) commit=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$ref_sha" --jq '.object.sha') ;;
-              commit) commit="$ref_sha" ;;
-              *)
-                echo "::error::cannot resolve tag $tag in $GITHUB_REPOSITORY (object type '$ref_type')" >&2
-                exit 1
-                ;;
-            esac
+          # Exit status is checked explicitly rather than with a `||
+          # echo ""` fallback: gh prints an error body to stdout on
+          # failure, so a fallback would be concatenated onto the
+          # captured JSON and read as a valid answer.
+          if ! ref=$(gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" 2>/dev/null); then
+            echo "::error::cannot resolve tag $tag in $GITHUB_REPOSITORY" >&2
+            exit 1
           fi
+          ref_type=$(printf '%s' "$ref" | python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["type"])')
+          ref_sha=$(printf '%s' "$ref" | python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])')
+          case "$ref_type" in
+            tag) ;;
+            commit)
+              echo "::error::tag $tag is a lightweight tag; the release policy requires annotated tags" >&2
+              exit 1
+              ;;
+            *)
+              echo "::error::cannot resolve tag $tag in $GITHUB_REPOSITORY (object type '$ref_type')" >&2
+              exit 1
+              ;;
+          esac
+          if ! tag_object=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$ref_sha" 2>/dev/null); then
+            echo "::error::cannot read tag object $ref_sha for tag $tag" >&2
+            exit 1
+          fi
+          commit=$(printf '%s' "$tag_object" | python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])')
+          case "$commit" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+            *) echo "::error::tag $tag resolves to '$commit', which is not a commit SHA" >&2; exit 1 ;;
+          esac
+          {
+            echo "tag=$tag"
+            echo "source-commit=$commit"
+          } >> "$GITHUB_OUTPUT"
+          echo "resolved $tag -> commit $commit"
 
-          if [ "$(git cat-file -t "$tag" 2>/dev/null)" != "tag" ]; then
+      # The checkout is pinned to the resolved commit, never to the
+      # event expression that named the tag. Building from the branch
+      # tip was the bug this prevents: on `workflow_run`, a default
+      # checkout lands on the default branch, so a commit landing on
+      # main after the tag would silently become the published source.
+      - name: Checkout the resolved release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ steps.source.outputs.source-commit }}
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # -----------------------------------------------------------------
+      # Re-derive the identity from the checkout itself: the tag object
+      # must be annotated and must dereference to the commit the tree is
+      # sitting on. The API already resolved the tag, but a checkout is
+      # only trustworthy if the tree can be proven to BE that commit,
+      # so this compares both against the working tree.
+      # -----------------------------------------------------------------
+      - name: Verify the checkout against the release identity
+        env:
+          TAG: ${{ steps.source.outputs.tag }}
+          PIN: ${{ steps.source.outputs.source-commit }}
+        run: |
+          set -euo pipefail
+          tag="$TAG"
+          commit="$PIN"
+          if ! resolved=$(git rev-parse --verify --quiet "$tag^{commit}"); then
+            echo "::error::tag $tag is not present in the checkout; its commit cannot be verified locally" >&2
+            exit 1
+          fi
+          if [ "$(git cat-file -t "$tag")" != "tag" ]; then
             echo "::error::tag $tag is not an annotated tag object; the release policy requires annotated tags" >&2
             exit 1
           fi
-
           head_sha=$(git rev-parse HEAD)
-          echo "tag $tag -> commit $commit; checked-out $head_sha"
-          if [ "$commit" != "$head_sha" ]; then
-            echo "::error::release $tag targets $commit, but this run has $head_sha checked out; refusing to publish" >&2
+          if [ "$resolved" != "$commit" ] || [ "$resolved" != "$head_sha" ]; then
+            echo "::error::release $tag targets $resolved, but this run pinned $commit and checked out $head_sha; refusing to publish" >&2
             exit 1
           fi
-          echo "same-SHA: the release targets this exact commit"
-
-          # Pin the working tree to the resolved commit and record it as
-          # the single source of truth for every later step. The checkout
-          # above already requested the right ref, but if main advanced
-          # between the trigger and this run — or a manual dispatch named
-          # a tag whose commit is not what got checked out — building
-          # from HEAD would silently publish the wrong source. Detaching
-          # here makes that impossible: everything downstream reads
-          # `source-commit`, never HEAD, never the branch tip.
-          git checkout --quiet --detach "$commit"
-          pinned=$(git rev-parse HEAD)
-          if [ "$pinned" != "$commit" ]; then
-            echo "::error::could not pin the working tree to $commit (at $pinned)" >&2
-            exit 1
-          fi
-          echo "source-commit=$commit" >> "$GITHUB_OUTPUT"
-          echo "tag $tag, commit $commit, version $tag, engine release $tag: all agree"
+          echo "same-SHA: release $tag targets commit $commit and the tree is exactly there"
 
       # -----------------------------------------------------------------
-      # Stage 1 — trusted verification on the tagged source, before any
-      # credential exists.
+      # Stage 1 — trusted verification on the tagged source. No
+      # credential exists in this job, so a defect in the release source
+      # cannot reach the App private key.
       # -----------------------------------------------------------------
       - name: Validate the release tag
         run: scripts/release-check.sh "${{ steps.source.outputs.tag }}"
@@ -256,6 +287,91 @@ jobs:
           retention-days: 1
           if-no-files-found: error
           include-hidden-files: true
+
+  publish:
+    needs: build
+    # The workflow_run trigger only counts on success.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    env:
+      # The single allowed destination. Not an input.
+      TARGET: FernSyntax/repoforge-template
+      TAG: ${{ needs.build.outputs.tag }}
+      HEAD_SHA: ${{ needs.build.outputs.source-commit }}
+      DIGEST: ${{ needs.build.outputs.manifest-digest }}
+    steps:
+      # Trusted code only. This job holds the App private key, so the
+      # engine it runs comes from the default branch — never from the
+      # release commit the build job materialized. There is no `ref:`
+      # here on purpose: the checkout defaults to the run's ref, which
+      # for `workflow_run` is the default branch.
+      - name: Checkout the trusted engine code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Download the verified build
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: template-build
+          path: .template-out
+
+      - name: Re-verify the downloaded build
+        run: go run ./cmd/repoforge template verify --path .template-out --require-source
+
+      # The artifact crossed the trust boundary from the unprivileged
+      # job. Before any credential exists, re-derive with trusted
+      # tooling and read-only API access that it is the build the
+      # release identity names: the manifest must record the commit the
+      # build job pinned and the digest it computed, and the tag must
+      # still resolve to that commit through the API.
+      - name: Confirm the build is the release the trigger named
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          manifest=".template-out/repoforge.manifest.json"
+          recorded_commit=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_commit"])' "$manifest")
+          recorded_digest=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["manifest_digest"])' "$manifest")
+          if [ "$recorded_commit" != "$HEAD_SHA" ]; then
+            echo "::error::the build records source commit $recorded_commit, expected $HEAD_SHA" >&2
+            exit 1
+          fi
+          if [ "$recorded_digest" != "$DIGEST" ]; then
+            echo "::error::the build records digest $recorded_digest, expected $DIGEST" >&2
+            exit 1
+          fi
+          if ! ref=$(gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" 2>/dev/null); then
+            echo "::error::cannot resolve tag $TAG in $GITHUB_REPOSITORY" >&2
+            exit 1
+          fi
+          ref_type=$(printf '%s' "$ref" | python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["type"])')
+          ref_sha=$(printf '%s' "$ref" | python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])')
+          if [ "$ref_type" != "tag" ]; then
+            echo "::error::tag $TAG is no longer an annotated tag object (object type '$ref_type')" >&2
+            exit 1
+          fi
+          if ! tag_object=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$ref_sha" 2>/dev/null); then
+            echo "::error::cannot read tag object $ref_sha for tag $TAG" >&2
+            exit 1
+          fi
+          api_commit=$(printf '%s' "$tag_object" | python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])')
+          if [ "$api_commit" != "$HEAD_SHA" ]; then
+            echo "::error::tag $TAG resolves to $api_commit, but the build pinned $HEAD_SHA; refusing to publish" >&2
+            exit 1
+          fi
+          echo "the build is release $TAG (commit $HEAD_SHA, digest $DIGEST): tag, manifest, and build job agree"
 
       # -----------------------------------------------------------------
       # Stage 3 — resolve the destination and its state.
@@ -339,15 +455,6 @@ jobs:
       # -----------------------------------------------------------------
       # Stage 5 — initial publication into an empty repository.
       # -----------------------------------------------------------------
-      - name: Download the verified build
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: template-build
-          path: .template-out
-
-      - name: Re-verify the downloaded build
-        run: go run ./cmd/repoforge template verify --path .template-out --require-source
-
       - name: Refuse a target that is not empty
         if: steps.target.outputs.mode == 'initial'
         env:
@@ -402,8 +509,8 @@ jobs:
         if: steps.target.outputs.mode == 'initial'
         env:
           APP_TOKEN: ${{ steps.app.outputs.token }}
-          TAG: ${{ steps.source.outputs.tag }}
-          HEAD_SHA: ${{ steps.source.outputs.source-commit }}
+          TAG: ${{ needs.build.outputs.tag }}
+          HEAD_SHA: ${{ needs.build.outputs.source-commit }}
         # shellcheck disable=SC2155 # RUNNER_TEMP is always set by GitHub Actions
         run: |
           set -euo pipefail
@@ -488,9 +595,8 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           TAG: v0.1.0
-          SOURCE_TAG: ${{ steps.source.outputs.tag }}
-          SOURCE_SHA: ${{ steps.source.outputs.tag }}
-          HEAD_SHA: ${{ steps.source.outputs.source-commit }}
+          SOURCE_TAG: ${{ needs.build.outputs.tag }}
+          HEAD_SHA: ${{ needs.build.outputs.source-commit }}
         run: |
           set -euo pipefail
           root=""
@@ -550,7 +656,7 @@ jobs:
           # produces a body with no separators at all: every paragraph
           # runs together on one line.
           printf -v notes 'Generated from FernSyntax/repoforge %s (%s).\n\nManifest digest: %s\n\nThis repository is the canonical generated starter repository. It is built from the RepoForge engine'"'"'s tagged source and verified byte-for-byte against that source by its own CI.\n\nUse it as a GitHub template:\n\n    gh repo create <owner>/<name> --template FernSyntax/repoforge-template --public --clone\n' \
-            "$SOURCE_TAG" "$HEAD_SHA" "${{ steps.build.outputs.manifest-digest }}"
+            "$SOURCE_TAG" "$HEAD_SHA" "$DIGEST"
           printf '%s\n' "$notes" > "$RUNNER_TEMP/template-notes.md"
           gh release create "$TAG" \
             --repo "$TARGET" \
@@ -595,9 +701,9 @@ jobs:
         if: steps.target.outputs.mode == 'routine'
         env:
           APP_TOKEN: ${{ steps.app.outputs.token }}
-          TAG: ${{ steps.source.outputs.tag }}
-          HEAD_SHA: ${{ steps.source.outputs.source-commit }}
-          DIGEST: ${{ steps.build.outputs.manifest-digest }}
+          TAG: ${{ needs.build.outputs.tag }}
+          HEAD_SHA: ${{ needs.build.outputs.source-commit }}
+          DIGEST: ${{ needs.build.outputs.manifest-digest }}
         # shellcheck disable=SC2155 # RUNNER_TEMP is always set by GitHub Actions
         run: |
           set -euo pipefail

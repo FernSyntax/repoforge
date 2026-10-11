@@ -526,10 +526,11 @@ func TestPublicationNeverCancelsInFlight(t *testing.T) {
 // the manifest claims the tag. The template is then built, verified,
 // and published from a commit the release never vetted.
 //
-// The workflow must therefore (a) check out the triggering SHA or tag
-// explicitly, (b) resolve the tag to its commit, detach the tree at it,
-// and (c) feed that resolved commit — never HEAD, never the branch tip
-// — to every later step as `source-commit`.
+// The workflow must therefore (a) resolve the release tag to its
+// commit through the API before anything runs, (b) check out exactly
+// that commit — as resolved data, never as an event expression — and
+// (c) feed that resolved commit, never HEAD, never the branch tip,
+// to every later step as `source-commit`.
 func TestPublicationBuildsFromTheTriggeringSHA(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", publicationWorkflowFile))
 	if err != nil {
@@ -537,9 +538,24 @@ func TestPublicationBuildsFromTheTriggeringSHA(t *testing.T) {
 	}
 	body := string(data)
 
-	// (a) The checkout pins the release identity.
-	if !strings.Contains(body, "ref: ${{ github.event.workflow_run.head_sha || inputs.tag }}") {
-		t.Errorf("%s does not pin the checkout to the triggering SHA or tag; a default checkout lands on the branch tip", publicationWorkflowFile)
+	// (a) The checkout pins the resolved release commit. An event
+	// expression in a checkout ref is what the untrusted-checkout
+	// scanners flag, and it is what previously let the publishing
+	// credential coexist with release-source code in one job.
+	if !strings.Contains(body, "ref: ${{ steps.source.outputs.source-commit }}") {
+		t.Errorf("%s does not pin the checkout to the resolved release commit", publicationWorkflowFile)
+	}
+	for _, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "ref:") {
+			continue
+		}
+		if strings.Contains(trimmed, "github.event.") {
+			t.Errorf("%s checks out an event expression (%q); a checkout ref must be resolved data, not attacker-influenceable event input", publicationWorkflowFile, trimmed)
+		}
+		if strings.Contains(trimmed, "github.sha") {
+			t.Errorf("%s checks out bare github.sha (%q); on workflow_run that is the default-branch tip, not the release", publicationWorkflowFile, trimmed)
+		}
 	}
 	// (c) No step takes the branch tip as its source.
 	if strings.Contains(body, "HEAD_SHA: ${{ github.sha }}") {
@@ -548,16 +564,116 @@ func TestPublicationBuildsFromTheTriggeringSHA(t *testing.T) {
 	if !strings.Contains(body, "HEAD_SHA: ${{ steps.source.outputs.source-commit }}") {
 		t.Errorf("%s does not feed the resolved source-commit to the build steps", publicationWorkflowFile)
 	}
-	// (b) The tree is detached at the resolved commit, not merely
-	// compared against HEAD.
-	if !strings.Contains(body, `git checkout --quiet --detach "$commit"`) {
-		t.Errorf("%s does not detach the working tree at the resolved commit", publicationWorkflowFile)
+	// (b) The checkout is verified against the release identity: the
+	// tag object is annotated and dereferences to the commit the tree
+	// is sitting on.
+	if !strings.Contains(body, `git rev-parse --verify --quiet "$tag^{commit}"`) {
+		t.Errorf("%s does not dereference the tag object; the tag's commit must be resolved from the tag object itself", publicationWorkflowFile)
 	}
-	if !strings.Contains(body, "echo \"source-commit=$commit\" >> \"$GITHUB_OUTPUT\"") {
-		t.Errorf("%s does not publish the resolved commit as the source-commit output", publicationWorkflowFile)
+	if !strings.Contains(body, `git cat-file -t "$tag"`) {
+		t.Errorf("%s does not assert the tag object type; a lightweight tag must be rejected", publicationWorkflowFile)
 	}
-	if strings.Contains(body, "echo \"source-commit=$(git rev-parse HEAD)\"") {
+	if !strings.Contains(body, "git rev-parse HEAD") {
+		t.Errorf("%s does not compare the checked-out tree against the resolved commit", publicationWorkflowFile)
+	}
+	if strings.Contains(body, `echo "source-commit=$(git rev-parse HEAD)"`) {
 		t.Errorf("%s records HEAD as the source commit; HEAD is whatever got checked out, not what was resolved", publicationWorkflowFile)
+	}
+}
+
+// publicationJob mirrors the job fields the separation test needs.
+type publicationJob struct {
+	Needs       any               `yaml:"needs"`
+	Permissions map[string]string `yaml:"permissions"`
+	Steps       []struct {
+		Uses string         `yaml:"uses"`
+		With map[string]any `yaml:"with"`
+		Env  map[string]any `yaml:"env"`
+		Run  string         `yaml:"run"`
+	} `yaml:"steps"`
+}
+
+// neededJobs normalizes the two YAML shapes `needs` can take: a single
+// job id as a string, or a list of job ids.
+func neededJobs(needs any) []string {
+	switch t := needs.(type) {
+	case string:
+		return []string{t}
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, e := range t {
+			if s, ok := e.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// TestPublicationSeparatesBuildFromPublish pins the privilege split
+// that keeps the publishing credential away from release-source code:
+// the job that checks out and executes the release source (build)
+// holds no secrets and no id-token, and the job that holds the App
+// private key (publish) executes only the default-branch engine code.
+//
+// This is the structural half of the untrusted-checkout fix: the
+// credential and the untrusted-code execution must live in different
+// jobs, or no amount of ref hygiene helps.
+func TestPublicationSeparatesBuildFromPublish(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", publicationWorkflowFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wf struct {
+		Jobs map[string]publicationJob `yaml:"jobs"`
+	}
+	if err := yamlUnmarshalForTest(data, &wf); err != nil {
+		t.Fatal(err)
+	}
+	build, ok := wf.Jobs["build"]
+	if !ok {
+		t.Fatal("no build job: the job that executes the release source is missing")
+	}
+	publish, ok := wf.Jobs["publish"]
+	if !ok {
+		t.Fatal("no publish job: the job that holds the credential is missing")
+	}
+	// The publish job must run after, and only after, the build.
+	found := false
+	for _, n := range neededJobs(publish.Needs) {
+		if n == "build" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the publish job does not need the build job; the two halves of the publication are not ordered")
+	}
+
+	// The build job is unprivileged: contents: read and nothing else.
+	for scope := range build.Permissions {
+		if scope != "contents" {
+			t.Errorf("the build job grants %s; a job that executes the release source must hold only contents: read", scope)
+		}
+	}
+	if level, ok := build.Permissions["contents"]; ok && level != "read" {
+		t.Errorf("the build job grants contents: %s; a job that executes the release source needs read only", level)
+	}
+	// No secrets and no id-token anywhere in the build job. The job is
+	// re-marshaled so the check covers every field, not just the ones
+	// this test knows about.
+	buildYAML, err := yaml.Marshal(map[string]any{"job": build})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(buildYAML), "secrets.") {
+		t.Errorf("the build job references a repository secret; the release-source execution must hold nothing an attacker could want:\n%s", buildYAML)
+	}
+	if strings.Contains(string(buildYAML), "id-token") {
+		t.Errorf("the build job references id-token; the release-source execution must hold nothing an attacker could want:\n%s", buildYAML)
+	}
+	if _, ok := publish.Permissions["id-token"]; !ok {
+		t.Error("the publish job does not hold id-token: write; it cannot mint the App installation token")
 	}
 }
 
