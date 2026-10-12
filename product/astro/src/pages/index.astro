@@ -1,0 +1,48 @@
+---
+import Base from "../layouts/Base.astro";
+import { SITE_NAME, SITE_DESCRIPTION } from "../site";
+---
+
+<Base title={SITE_NAME} description={SITE_DESCRIPTION}>
+  <section class="hero" aria-labelledby="hero-heading">
+    <h1 id="hero-heading">{SITE_NAME}</h1>
+    <p>{SITE_DESCRIPTION}</p>
+    <a class="button" href="#contact">Get in touch</a>
+  </section>
+
+  <section id="features" aria-labelledby="features-heading">
+    <h2 id="features-heading">Features</h2>
+    <ul class="features">
+      <li>
+        <h3>Static by default</h3>
+        <p class="muted">
+          No client-side JavaScript ships with this template. Add an
+          island only where interactivity earns its weight.
+        </p>
+      </li>
+      <li>
+        <h3>Accessible markup</h3>
+        <p class="muted">
+          Landmarks, a skip link, visible focus, and reduced-motion
+          support are built into the layout and styles.
+        </p>
+      </li>
+      <li>
+        <h3>Search-ready</h3>
+        <p class="muted">
+          Titles, descriptions, and Open Graph tags come from your
+          project values — never from invented content.
+        </p>
+      </li>
+    </ul>
+  </section>
+
+  <section id="contact" aria-labelledby="contact-heading">
+    <h2 id="contact-heading">Contact</h2>
+    <p>
+      Replace this section with your own contact path: an email link,
+      a form endpoint, or a scheduling page. The template ships no
+      tracking and no third-party scripts.
+    </p>
+  </section>
+</Base>

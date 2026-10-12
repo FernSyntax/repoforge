@@ -5,10 +5,10 @@
 // Command repoforge is the RepoForge CLI entry point.
 //
 // Implemented commands: validate (spec.md §12), doctor (spec.md §11), bootstrap
-// (spec.md §10), template validate/build/adopt (spec.md §13), git commit-check
-// and branch-check, mcp serve (spec.md §24, FR-035), and pr check. Exit codes:
-// 0 = success, 1 = findings or pending changes, 2 = invocation or
-// configuration error.
+// (spec.md §10), template validate/build/adopt (spec.md §13), astro build
+// (spec.md §24, FR-039), git commit-check and branch-check, mcp serve
+// (spec.md §24, FR-035), and pr check. Exit codes: 0 = success,
+// 1 = findings or pending changes, 2 = invocation or configuration error.
 package main
 
 import (
@@ -39,6 +39,10 @@ import (
 // It is the default for template-source commands (validate, build)
 // only; template adopt targets a generated repository instead.
 const defaultTemplateSource = "template"
+
+// defaultProductSource is the canonical Astro product template source
+// directory (spec.md §24, FR-039).
+const defaultProductSource = "product/astro"
 
 // defaultSourceURL is the canonical engine repository recorded in a
 // generated template manifest. It is a product constant, not a
@@ -78,6 +82,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runIssue(args[1:], stdout, stderr)
 	case "mcp":
 		return runMCP(args[1:], os.Stdin, stdout, stderr)
+	case "astro":
+		return runAstro(args[1:], stdout, stderr)
 	case "schema":
 		return runSchema(args[1:], stdout, stderr)
 	case "version", "--version":
@@ -166,6 +172,52 @@ func runMCP(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// runAstro dispatches the product-template subcommands. build is the
+// only one: it renders the canonical Astro product source
+// (spec.md §24, FR-039) with the same safety contract as template
+// build — validated variables, resolved destination, validated output
+// before anything is deleted, atomic publish.
+func runAstro(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 || args[0] != "build" {
+		fmt.Fprintln(stderr, "repoforge astro: want subcommand 'build'")
+		return 2
+	}
+	fs := flag.NewFlagSet("astro build", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	srcDir := fs.String("product-source", defaultProductSource, "Astro product template source directory")
+	outDir := fs.String("out", "", "output directory (required)")
+	force := fs.Bool("force", false, "replace a non-empty existing output directory")
+	vars := varFlags{}
+	fs.Var(vars, "var", "template variable key=value (repeatable)")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "repoforge astro build: unexpected argument %q\n", fs.Arg(0))
+		return 2
+	}
+	if *outDir == "" {
+		fmt.Fprintln(stderr, "repoforge astro build: --out is required")
+		return 2
+	}
+	files, err := template.LoadSource(*srcDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "repoforge astro: %v\n", err)
+		return 2
+	}
+	issues, err := template.BuildProduct(files, *srcDir, *outDir, map[string]string(vars),
+		template.BuildOptions{Force: *force})
+	for _, i := range issues {
+		fmt.Fprintln(stdout, i)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "repoforge astro build: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "astro build: wrote %d files to %s\n", len(files), *outDir)
+	return 0
+}
+
 func usage(w io.Writer) {
 	fmt.Fprint(w, `repoforge - the RepoForge CLI
 
@@ -191,6 +243,7 @@ Usage:
   repoforge issue scaffold --type bug|feature|task|security [--path DIR]
   repoforge issue check --type bug|feature|task|security --file BODY [--path DIR]
   repoforge mcp serve --allowed-dir DIR [--template-source DIR]
+  repoforge astro build --out DIR [--product-source DIR] [--var key=value ...] [--force]
   repoforge version
 
 validate checks the local repository checkout against the RepoForge
