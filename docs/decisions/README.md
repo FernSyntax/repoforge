@@ -24,6 +24,7 @@ normative from the moment it merges.
 | [0014](0014-publication-privilege-separation.md) | Publication privilege separation — build without the credential | accepted | §14.3.3, §18.4 |
 | [0015](0015-team-profile-maximal-and-gated-sast.md) | Scorecard-maximal team profile and gated SAST checks | accepted | §7.6, §8 |
 | [0016](0016-provider-abstraction-over-openai-compatible-gateway.md) | Provider abstraction over the OpenAI-compatible gateway contract | proposed | §24, FR-032–FR-034, FR-038 |
+| [0019](0019-local-first-lexical-retrieval.md) | Local-first lexical retrieval, embeddings deferred | proposed | §24, FR-037 |
 
 `spec.md` in each link is the root specification.
 
