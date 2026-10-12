@@ -13,6 +13,9 @@ declarative repository policy and related configuration files.
 - `github-governance.schema.yaml` / `.json` — canonical/derived schema
   for the GitHub governance documents in `configs/github/`
   (docs/architecture/github-governance.md).
+- `project.schema.yaml` / `.json` — canonical/derived schema for the
+  project model (spec.md §24, FR-031), implemented by
+  `internal/project`.
 
 Documentation:
 

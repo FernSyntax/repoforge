@@ -37,6 +37,7 @@ func DefaultPairs() []Pair {
 	return []Pair{
 		{"schemas/repoforge.schema.yaml", "schemas/repoforge.schema.json"},
 		{"schemas/github-governance.schema.yaml", "schemas/github-governance.schema.json"},
+		{"schemas/project.schema.yaml", "schemas/project.schema.json"},
 	}
 }
 

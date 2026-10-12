@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:repoforge:schema:project:v1",
+  "$comment": "Schema version: v1. Project documents declare it via schemaVersion. Canonical form: project.schema.yaml; project.schema.json is derived from it.",
+  "title": "RepoForge Project Model",
+  "description": "Structured project definition consumed by orchestration and MCP tooling. Unknown fields are rejected: every object sets additionalProperties to false. The name doubles as a filesystem identifier, so its pattern excludes separators, dots, and uppercase (spec.md FR-031).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "name", "purpose"],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "v1",
+      "description": "Project model schema version. Tooling must reject documents declaring an unknown version (spec.md FR-031)."
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "Project name. Lowercase alphanumerics and hyphens only: the name may seed output directories, so path separators, dots, and traversal sequences are impossible by construction."
+    },
+    "purpose": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What the project is for, in plain language. Must be non-blank."
+    },
+    "users": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "description": "Intended users of the project. Optional; every entry must be non-blank."
+    },
+    "requirements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "text"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Z]+-[0-9]+$",
+            "description": "Stable requirement identifier (for example FR-001). Identifiers must be unique within the document."
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The requirement, in plain language. Must be non-blank."
+          }
+        }
+      },
+      "description": "Functional scope of the project. Optional; semantic uniqueness of identifiers is enforced by tooling."
+    },
+    "exclusions": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "description": "Explicit non-goals. Optional; every entry must be non-blank."
+    }
+  }
+}
