@@ -25,6 +25,7 @@ import (
 
 	"github.com/FernSyntax/repoforge/internal/bootstrap"
 	"github.com/FernSyntax/repoforge/internal/doctor"
+	"github.com/FernSyntax/repoforge/internal/generate"
 	ghub "github.com/FernSyntax/repoforge/internal/github"
 	"github.com/FernSyntax/repoforge/internal/gitrules"
 	"github.com/FernSyntax/repoforge/internal/mcp"
@@ -86,6 +87,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runAstro(args[1:], stdout, stderr)
 	case "schema":
 		return runSchema(args[1:], stdout, stderr)
+	case "generate":
+		return runGenerate(args[1:], os.Stdin, stdout, stderr)
 	case "version", "--version":
 		fmt.Fprintln(stdout, version.Version)
 		return 0
@@ -144,6 +147,47 @@ func runSchema(args []string, stdout, stderr io.Writer) int {
 // runMCP serves the MCP tool surface over stdio. serve is the only
 // subcommand; it runs until stdin closes. Writable tool paths resolve
 // inside --allowed-dir (spec.md §24, FR-035).
+// runGenerate drives the interactive journey: brief questions, spec
+// approval, then the run and its report (spec.md §24, FR-036).
+func runGenerate(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("generate", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	dir := fs.String("dir", "", "working directory for the run (required)")
+	siteRel := fs.String("out", "site", "site directory inside --dir")
+	routes := routeFlags{}
+	fs.Var(&routes, "route", "task=model routing override (repeatable)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "repoforge generate: unexpected argument %q\n", fs.Arg(0))
+		return 2
+	}
+	if *dir == "" {
+		fmt.Fprintln(stderr, "repoforge generate: --dir is required")
+		return 2
+	}
+	_, err := generate.RunGenerate(context.Background(), stdin, stdout, stderr, *dir, *siteRel, routes)
+	if err != nil {
+		fmt.Fprintf(stderr, "repoforge generate: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// routeFlags collects repeatable task=model overrides.
+type routeFlags []string
+
+func (r *routeFlags) String() string { return strings.Join(*r, ",") }
+
+func (r *routeFlags) Set(s string) error {
+	if !strings.Contains(s, "=") {
+		return fmt.Errorf("want task=model, got %q", s)
+	}
+	*r = append(*r, s)
+	return nil
+}
+
 func runMCP(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] != "serve" {
 		fmt.Fprintln(stderr, "repoforge mcp: want subcommand 'serve'")
@@ -244,6 +288,7 @@ Usage:
   repoforge issue scaffold --type bug|feature|task|security [--path DIR]
   repoforge issue check --type bug|feature|task|security --file BODY [--path DIR]
   repoforge mcp serve --allowed-dir DIR [--template-source DIR] [--product-source DIR]
+  repoforge generate [--dir DIR] [--route task=model ...]
   repoforge astro build --out DIR [--product-source DIR] [--var key=value ...] [--force]
   repoforge version
 
