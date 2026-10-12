@@ -13,6 +13,7 @@ coverage.*
 # Local environment and credentials (never commit)
 .env
 .env.*
+!.env.example
 *.token
 
 # Generated template output (scripts/build-template default).
