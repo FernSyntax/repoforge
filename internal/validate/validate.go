@@ -1,3 +1,7 @@
+// Copyright the repoforge contributors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Package validate checks a local repository checkout against the
 // RepoForge standard. It is deterministic (spec.md §12.2): no network,
 // no clock, no randomness; identical checkouts produce identical

@@ -1,4 +1,8 @@
 #!/bin/sh
+# Copyright the repoforge contributors.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Release notes extraction: the published release notes come from this
 # repository's CHANGELOG.md section for the tag, exactly as spec.md §14
 # and docs/development/release-process.md R5 require. GoReleaser's own

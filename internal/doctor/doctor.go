@@ -1,3 +1,7 @@
+// Copyright the repoforge contributors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Package doctor audits a repository against the RepoForge policy
 // and reports drift. Doctor is strictly read-only (spec.md §11.2): it never
 // modifies the local working tree, local git state, or any GitHub

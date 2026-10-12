@@ -1,3 +1,7 @@
+// Copyright the repoforge contributors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Package integration holds opt-in end-to-end tests against a real
 // GitHub test repository. They never run in CI or in a normal
 // `go test ./...`: every test skips unless REPOFORGE_TEST_REPO is

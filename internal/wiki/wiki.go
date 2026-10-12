@@ -1,3 +1,7 @@
+// Copyright the repoforge contributors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Package wiki synchronizes a declared set of Markdown pages into a
 // GitHub repository wiki.
 //
