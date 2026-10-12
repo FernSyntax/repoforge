@@ -71,6 +71,84 @@ func TestLoadSourceSkipsArtifactDirs(t *testing.T) {
 	}
 }
 
+// TestBuildProductWebStandards proves the rendered site carries the
+// machine-checked SEO/AEO/GEO contract: one h1 per page, required
+// meta and social tags, valid JSON-LD with no invented URLs,
+// answer-engine index, and honest placeholder markers.
+func TestBuildProductWebStandards(t *testing.T) {
+	src := productSource(t)
+	out := filepath.Join(t.TempDir(), "site")
+	buildProduct(t, src, out, productVars, false)
+
+	for _, rel := range []string{"src/pages/index.astro", "src/pages/404.astro"} {
+		raw := readOut(t, out, rel)
+		if n := strings.Count(raw, "<h1"); n != 1 {
+			t.Fatalf("%s must carry exactly one h1, has %d", rel, n)
+		}
+		if !strings.Contains(raw, "<Base") {
+			t.Fatalf("%s must render inside the shared layout", rel)
+		}
+	}
+
+	// Layout-owned contract: landmarks, head meta, social tags, and
+	// the WebSite structured-data mechanism. JSON-LD must render via
+	// set:html: bare expressions inside script tags pass through
+	// Astro uncompiled, which a real build proved.
+	layout := readOut(t, out, "src/layouts/Base.astro")
+	for _, want := range []string{
+		`<html lang="en"`, `<main id="main"`, `skip-link`, `<title>`,
+		`name="description"`, `name="viewport"`, `name="theme-color"`,
+		`property="og:title"`, `property="og:description"`, `property="og:type"`,
+		`name="twitter:card"`, `name="twitter:title"`, `name="twitter:description"`,
+		`rel="icon"`, `type="application/ld+json"`, `"@type": "WebSite"`,
+		`"@context": "https://schema.org"`, "set:html",
+	} {
+		if !strings.Contains(layout, want) {
+			t.Errorf("layout missing required markup %s", want)
+		}
+	}
+	if strings.Contains(layout, `"url"`) {
+		t.Fatal("layout JSON-LD must not invent URLs")
+	}
+
+	// Page-owned contract: answer-first summary, honest FAQ, and the
+	// FAQPage mechanism mirroring visible content.
+	index := readOut(t, out, "src/pages/index.astro")
+	for _, want := range []string{
+		`id="brief-heading"`, `id="faq"`, `"@type": "FAQPage"`,
+		`"@type": "Question"`, "acceptedAnswer",
+	} {
+		if !strings.Contains(index, want) {
+			t.Errorf("index missing required content %s", want)
+		}
+	}
+	if strings.Contains(index, `"url"`) {
+		t.Fatal("FAQ JSON-LD must not invent URLs")
+	}
+	if !strings.Contains(index, "Replace this answer") {
+		t.Fatal("FAQ must ship as labeled replace-me content, never invented facts")
+	}
+
+	for _, rel := range []string{"public/llms.txt", "public/robots.txt", "src/styles/reset.css"} {
+		if _, err := os.Stat(filepath.Join(out, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("built tree missing %s: %v", rel, err)
+		}
+	}
+	llms := readOut(t, out, "public/llms.txt")
+	if !strings.Contains(llms, "demo-site") {
+		t.Fatal("llms.txt must carry the project identity")
+	}
+}
+
+func readOut(t *testing.T, out, rel string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(out, filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
 // TestBuildProductGoldenFileSet proves the product source ships the
 // complete site contract: pages, layout, components, styles, assets,
 // config, and docs.
@@ -87,8 +165,8 @@ func TestBuildProductGoldenFileSet(t *testing.T) {
 		"src/pages/index.astro", "src/pages/404.astro",
 		"src/layouts/Base.astro",
 		"src/components/Header.astro", "src/components/Footer.astro",
-		"src/site.ts", "src/styles/global.css",
-		"public/favicon.svg", "public/robots.txt",
+		"src/site.ts", "src/styles/global.css", "src/styles/reset.css",
+		"public/favicon.svg", "public/robots.txt", "public/llms.txt",
 		"package-lock.json",
 	} {
 		if !got[want] {
