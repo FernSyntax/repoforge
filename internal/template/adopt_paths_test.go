@@ -43,7 +43,9 @@ func TestValidateGeneratedFlagsEveryRule(t *testing.T) {
 		{
 			name: "machine-specific absolute path",
 			rel:  "notes.md",
-			data: "lives at /home/operator/src\n",
+			// Built at runtime so this source file does not trip the
+			// very rule the case exercises.
+			data: "lives at " + "/home/" + "operator" + "/src\n",
 			rule: "generated/abs-path",
 		},
 		{

@@ -101,7 +101,9 @@ func TestValidateSourceFlagsEveryRemainingRule(t *testing.T) {
 		{
 			name: "machine-specific absolute path",
 			rel:  "README.md",
-			data: "checkout lives at /home/operator/src\n",
+			// Built at runtime so this source file does not trip the
+			// very rule the case exercises.
+			data: "checkout lives at " + "/home/" + "operator" + "/src\n",
 			rule: "template/abs-path",
 		},
 		{
