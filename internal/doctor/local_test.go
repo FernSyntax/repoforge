@@ -208,8 +208,8 @@ func TestRunLocalReportsSchemaViolations(t *testing.T) {
 
 // TestRunLocalReportsPlaceholders maps content/placeholder onto
 // local/placeholders: an unresolved template placeholder in a
-// generated repository is the defect that ships "{{ .Owner }}" to a
-// public README.
+// generated repository is the defect that ships an ownership
+// placeholder to a public README.
 func TestRunLocalReportsPlaceholders(t *testing.T) {
 	dir := initRepo(t, doctorTestPolicy)
 	// Built at runtime so this source file does not trip its own detector.
