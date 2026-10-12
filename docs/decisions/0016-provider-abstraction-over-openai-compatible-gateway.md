@@ -1,6 +1,6 @@
 # ADR-0016: Provider abstraction over the OpenAI-compatible gateway contract
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-12
 - Spec: spec.md §24, FR-032, FR-033, FR-034, FR-038 (planned)
 - Implementation: `internal/provider/*`
@@ -65,6 +65,6 @@ which reviewers must keep small.
 ## Links
 
 - Issue: #33
-- Pull request: TBD
+- Pull request: #35
 - Tests: `internal/provider/*_test.go` (mocked gateway via `httptest`)
 - Related decisions: 0001 (Go CLI, stdlib-first), 0002 (schema discipline, applied to route config)
