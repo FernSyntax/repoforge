@@ -65,30 +65,72 @@ def cmd_start(args) -> int:
     config = {"configurable": {"thread_id": run_id}}
     initial = {"run_id": run_id, "brief": brief, "stage": "intake",
                "attempts": {}, "errors": []}
-    outcome = _drive(graph, config, initial)
+    outcome = _drive(graph, config, initial, as_json=args.json)
     if outcome == "paused":
-        print(f"paused; resume with: run.py resume --workdir {args.workdir} "
-              f"--thread {run_id} --answers ANSWERS.json|--approval APPROVAL.json")
+        if not args.json:
+            print(f"paused; resume with: run.py resume --workdir "
+                  f"{args.workdir} --thread {run_id} "
+                  f"--answers ANSWERS.json|--approval APPROVAL.json")
         return EXIT_PAUSED
     return 0
 
 
-def _drive(graph, config, initial=None):
-    stream = graph.stream(initial, config, stream_mode="updates") \
-        if initial is not None else graph.stream(None, config,
-                                                 stream_mode="updates")
-    for _ in stream:
-        pass
+def _drive(graph, config, initial=None, as_json=False):
+    """Run the graph until it pauses or finishes.
+
+    With as_json the outcome is one JSON record on stdout —
+    {"event": "paused"|"done"|"failed", "run_id", "payload", "report"}
+    — so `repoforge generate` can drive the journey without scraping
+    prose. Human output stays the default.
+    """
+    try:
+        stream = graph.stream(initial, config, stream_mode="updates") \
+            if initial is not None else graph.stream(None, config,
+                                                     stream_mode="updates")
+        for _ in stream:
+            pass
+    except Exception as e:  # a crashed node is a failure, not a traceback
+        if as_json:
+            print(json.dumps({"event": "failed", "run_id": "",
+                              "report": "the journey crashed: "
+                                        f"{type(e).__name__}: {e}"}))
+            return "failed"
+        print(f"the journey crashed: {type(e).__name__}: {e}", file=sys.stderr)
+        return "failed"
     snapshot = graph.get_state(config)
     values = snapshot.values or {}
-    if values.get("done"):
-        print(values.get("report", "done"))
-        return "done"
     tasks = snapshot.tasks
+    run_id = str(values.get("run_id", "") or "")
     if tasks and getattr(tasks[0], "interrupts", None):
         payload = tasks[0].interrupts[0].value
+        if as_json:
+            print(json.dumps({"event": "paused", "run_id": run_id,
+                              "payload": payload}))
+            return "paused"
         print(json.dumps({"paused": payload}, indent=2))
         return "paused"
+    if values.get("failed"):
+        report = values.get("report", "failed with no report")
+        if as_json:
+            print(json.dumps({"event": "failed", "run_id": run_id,
+                              "report": report}))
+            return "failed"
+        print(report, file=sys.stderr)
+        return "failed"
+    if values.get("done"):
+        report = values.get("report", "done")
+        if as_json:
+            print(json.dumps({"event": "done", "run_id": run_id,
+                              "report": report}))
+            return "done"
+        print(report)
+        return "done"
+    if as_json:
+        print(json.dumps({"event": "failed", "run_id": run_id,
+                          "report": "the run halted without a terminal "
+                                    "state; inspect it with the status "
+                                    "command"}))
+        return "failed"
     print(json.dumps({"state": values}, indent=2, default=str))
     return "halted"
 
@@ -101,16 +143,18 @@ def cmd_resume(args) -> int:
     elif "approval" in envelope:
         resume_value = envelope["approval"]
     else:
-        print("payload needs 'answers' or 'approval'", file=sys.stderr)
-        return 2
+        # A bare payload of answers (no envelope) is also accepted, so a
+        # caller can write the answers object directly.
+        resume_value = envelope
     db_path = os.path.join(args.workdir, "runs.sqlite3")
     graph = _graph(args, _deps(args), db_path)
     config = {"configurable": {"thread_id": args.thread}}
-    stream = graph.stream(Command(resume=resume_value), config,
-                          stream_mode="updates")
-    for _ in stream:
-        pass
-    return cmd_status(args)
+    outcome = _drive(graph, config, Command(resume=resume_value),
+                     as_json=args.json)
+    if outcome == "paused" and not args.json:
+        print(f"paused again; resume with: run.py resume --workdir "
+              f"{args.workdir} --thread {args.thread}")
+    return EXIT_PAUSED if outcome == "paused" else 0
 
 
 def cmd_status(args) -> int:
@@ -128,6 +172,9 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
     common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--json", action="store_true",
+                        help="emit one machine-readable event record "
+                             "instead of human output")
     common.add_argument("--workdir", required=True)
     common.add_argument("--repoforge-bin", default="")
     common.add_argument("--template-source", default="template")
