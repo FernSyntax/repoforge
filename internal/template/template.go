@@ -111,6 +111,14 @@ type SourceFile struct {
 	Data []byte
 }
 
+// artifactDirs are never template source: dependency caches and build
+// outputs would poison placeholder scanning and the manifest, and
+// walking them can stall a build (tens of thousands of files). The
+// list is intentionally narrow — node_modules, dist, .next, coverage —
+// because generic names like "out" or "build" can be legitimate source
+// directories. The source root itself (rel ".") is never skipped.
+var artifactDirs = []string{"node_modules", "dist", ".next", "coverage"}
+
 // LoadSource reads the template source tree in deterministic (sorted)
 // order.
 func LoadSource(dir string) ([]SourceFile, error) {
@@ -126,6 +134,13 @@ func LoadSource(dir string) ([]SourceFile, error) {
 		if d.IsDir() {
 			if d.Name() == ".git" && rel != "." {
 				return filepath.SkipDir
+			}
+			if rel != "." {
+				for _, skip := range artifactDirs {
+					if d.Name() == skip {
+						return filepath.SkipDir
+					}
+				}
 			}
 			return nil
 		}
@@ -325,7 +340,7 @@ func Build(files []SourceFile, srcDir, outDir string, vars map[string]string, op
 	if err := checkDestination(dest, opts.Force); err != nil {
 		return nil, err
 	}
-	if err := publishTree(dest, rendered, manifest); err != nil {
+	if err := publishTree(dest, rendered, manifest, ValidateBuiltTree); err != nil {
 		return nil, err
 	}
 	return nil, nil
@@ -367,8 +382,11 @@ func checkDestination(dest string, force bool) error {
 
 // publishTree renders the whole tree into a temporary directory beside
 // dest and then swaps it into place. dest is only ever replaced by a
-// fully written tree.
-func publishTree(dest string, files []SourceFile, manifest *Manifest) error {
+// fully written tree. The validate gate runs against the staged tree
+// with its real manifest: governance builds pass ValidateBuiltTree,
+// product builds pass the unresolved-placeholder check, so each output
+// contract is enforced before anything is published.
+func publishTree(dest string, files []SourceFile, manifest *Manifest, validate func([]SourceFile) []Issue) error {
 	parent := filepath.Dir(dest)
 	if _, err := os.Stat(parent); err != nil {
 		if err := os.MkdirAll(parent, 0o755); err != nil {
@@ -402,7 +420,7 @@ func publishTree(dest string, files []SourceFile, manifest *Manifest) error {
 	if err != nil {
 		return fmt.Errorf("template: reading staged tree: %w", err)
 	}
-	if issues := ValidateBuiltTree(staged); len(issues) > 0 {
+	if issues := validate(staged); len(issues) > 0 {
 		return fmt.Errorf("template: staged output failed validation (%d issue(s)); %s was not modified: %s",
 			len(issues), dest, issues[0])
 	}

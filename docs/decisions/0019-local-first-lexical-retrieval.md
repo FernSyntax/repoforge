@@ -1,6 +1,6 @@
 # ADR-0019: Local-first lexical retrieval, embeddings deferred
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-12
 - Spec: spec.md §24, FR-037 (planned)
 - Implementation: `internal/retrieve/*`
@@ -57,6 +57,6 @@ land; large generated trees need refresh discipline from callers.
 ## Links
 
 - Issue: #40
-- Pull request: TBD
+- Pull request: #41
 - Tests: `internal/retrieve/*_test.go` (temp trees, no network)
 - Related decisions: 0001 (Go CLI, stdlib-first), 0018 (orchestration consumes this)

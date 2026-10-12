@@ -1,6 +1,6 @@
 # ADR-0017: MCP server as a stdlib JSON-RPC subset over stdio
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-12
 - Spec: spec.md §24, FR-035 (planned)
 - Implementation: `internal/mcp/*`, `repoforge mcp serve`
@@ -61,6 +61,6 @@ method-not-found until the surface grows by decision, not drift.
 ## Links
 
 - Issue: #36
-- Pull request: TBD
+- Pull request: #37
 - Tests: `internal/mcp/*_test.go` (in-process stdio sessions)
 - Related decisions: 0001 (Go CLI, stdlib-first), 0016 (provider boundary style)

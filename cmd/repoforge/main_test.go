@@ -827,3 +827,50 @@ func TestMCPServeAnswersAFullSession(t *testing.T) {
 		t.Errorf("capabilities missing tool names: %s", out)
 	}
 }
+
+// TestAstroBuildRendersTheProductTemplate proves the advertised
+// product build works end to end from the canonical source.
+func TestAstroBuildRendersTheProductTemplate(t *testing.T) {
+	root := repoRoot(t)
+	chdir(t, root)
+	out := filepath.Join(t.TempDir(), "site")
+	var stdout, stderr strings.Builder
+	args := []string{"astro", "build", "--out", out,
+		"--var", "ProjectName=demo-site", "--var", "Description=A demonstration marketing site."}
+	if code := run(args, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d, want 0\n%s%s", code, stdout.String(), stderr.String())
+	}
+	for _, rel := range []string{"package.json", "src/pages/index.astro", "repoforge.manifest.json"} {
+		if _, err := os.Stat(filepath.Join(out, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("built site missing %s: %v", rel, err)
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(out, "src", "site.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"demo-site"`) {
+		t.Errorf("vars not rendered:\n%s", raw)
+	}
+}
+
+// TestAstroBuildNeedsOutAndVars pins the failure contract: missing
+// output and missing values are usage-class failures that write
+// nothing.
+func TestAstroBuildNeedsOutAndVars(t *testing.T) {
+	root := repoRoot(t)
+	chdir(t, root)
+	var stdout, stderr strings.Builder
+	if code := run([]string{"astro", "build"}, &stdout, &stderr); code != 2 {
+		t.Errorf("exit = %d, want 2 (missing --out)", code)
+	}
+	out := filepath.Join(t.TempDir(), "site")
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"astro", "build", "--out", out}, &stdout, &stderr); code == 0 {
+		t.Errorf("exit = 0, want non-zero (missing vars)")
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Errorf("failed build must not create %s", out)
+	}
+}

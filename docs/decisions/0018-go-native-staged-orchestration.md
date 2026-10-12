@@ -1,6 +1,6 @@
 # ADR-0018: Go-native staged orchestration with file checkpoints
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-12
 - Spec: spec.md §24, FR-036 (planned)
 - Implementation: `internal/orchestrate/*`
@@ -56,6 +56,6 @@ operator per run directory (concurrent writers are not coordinated).
 ## Links
 
 - Issue: #38
-- Pull request: TBD
+- Pull request: #39
 - Tests: `internal/orchestrate/*_test.go` (deterministic, injected fakes)
 - Related decisions: 0001 (Go CLI, stdlib-first), 0016 (injected-boundary style)

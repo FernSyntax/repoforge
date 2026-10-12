@@ -73,3 +73,7 @@ ownership:
     - "AGENTS.md"
     - "CONTRIBUTING.md"
     - "template/**"
+    # The Astro product source is the same kind of intentional
+    # template: engine-resolved placeholders, including the project
+    # name npm records in package-lock.json.
+    - "product/astro/**"
