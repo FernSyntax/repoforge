@@ -1,6 +1,6 @@
 # ADR-0020: Astro product template with engine-side deterministic build
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-12
 - Spec: spec.md §24, FR-039 (planned)
 - Implementation: `product/astro/*`, `internal/template/product.go`, `repoforge astro build`
@@ -63,6 +63,6 @@ until an adopter supplies real content.
 ## Links
 
 - Issue: #42
-- Pull request: TBD
+- Pull request: #47
 - Tests: `internal/template/product_test.go`, `cmd/repoforge` astro tests (offline); `npm run build` evidence in the PR body
 - Related decisions: 0002 (schema discipline for vars), 0004 (one-way generation)

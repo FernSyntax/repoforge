@@ -682,15 +682,15 @@ write and fails closed on mismatch.
 | FR-028 | An ambiguous mutation is reported as unknown, never as success | INVARIANT | internal/github | client_test.go |
 | FR-029 | Generated repositories carry a fill-in-ready `spec.md` | ENFORCED | template/spec.md, internal/template | template_test.go |
 | FR-030 | Generated repositories carry issue/PR forms, an ADR process, wiki seed, and a definition of done | ENFORCED | template/ | template_test.go |
-| FR-031 | The project model is a typed, versioned, documented schema; unknown fields and unknown versions are rejected; model output is validated, never trusted | ENFORCED | planned (see §24) | planned: schema, invalid-input, and semantic-validation tests |
-| FR-032 | Inference goes through a central provider abstraction; no model ID is hardcoded in application code; capability routing is configurable | ENFORCED | planned (see §24) | planned: routing unit tests against a mocked gateway |
-| FR-033 | Free-only inference is the default; exhaustion of eligible free routes pauses with a checkpoint, never falling back to paid inference without explicit opt-in | INVARIANT | planned (see §24) | planned: fallback, exhaustion, and resume tests against a mocked gateway |
-| FR-034 | Retries are bounded and classified; deterministic client errors are not retried indefinitely | ENFORCED | planned (see §24) | planned: retry-bound tests against a mocked gateway |
-| FR-035 | The MCP surface exposes only approved engine operations, with validated arguments and enforced filesystem boundaries | ENFORCED | planned (see §24) | planned: protocol tests and path-traversal tests |
-| FR-036 | Orchestration runs explicit stages with persistent checkpoints, human approval gates for consequential actions, and bounded repair loops | ENFORCED | planned (see §24) | planned: resume, approval, and repair-limit tests with mocked inference |
-| FR-037 | Retrieval serves source-grounded context with provenance; secrets and build artifacts are excluded; retrieved content cannot override policy | ENFORCED | planned (see §24) | planned: provenance, invalidation, and injection tests |
-| FR-038 | Inference credentials come from the environment at invocation time; secrets are redacted from logs and outbound inference context is allowlisted | INVARIANT | planned (see §24) | planned: redaction tests |
-| FR-039 | The Astro marketing-site product template builds reproducibly from the engine with the determinism and provenance guarantees of §13 | ENFORCED | planned (see §24) | planned: golden build tests |
+| FR-031 | The project model is a typed, versioned, documented schema; unknown fields and unknown versions are rejected; model output is validated, never trusted | ENFORCED | internal/project, schemas/project.schema.yaml + .json | project_test.go (load, strict decode, uniqueness, unsafe name, marshal fixed point, schema-pattern drift) |
+| FR-032 | Inference goes through a central provider abstraction; no model ID is hardcoded in application code; capability routing is configurable | ENFORCED | internal/provider | provider_test.go (route defaults, overrides, task routing, capabilities discovery) |
+| FR-033 | Free-only inference is the default; exhaustion of eligible routes stops cleanly as a classified failure, never falling back to paid inference without explicit opt-in | INVARIANT | internal/provider | provider_test.go (rate-limit exhaustion, no paid fallback by construction — the package has no paid route) |
+| FR-034 | Retries are bounded and classified; deterministic client errors are not retried indefinitely | ENFORCED | internal/provider | provider_test.go (auth/invalid-request fail fast, rate-limit and server bounded to maxAttempts, Retry-After honored) |
+| FR-035 | The MCP surface exposes only approved engine operations, with validated arguments and enforced filesystem boundaries | ENFORCED | internal/mcp | mcp_test.go (handshake, five-tool surface, escapes refused, protocol errors), main_test.go (CLI dispatch) |
+| FR-036 | Orchestration runs explicit stages with persistent checkpoints, human approval gates for consequential actions, and bounded repair loops | ENFORCED | internal/orchestrate, orchestration/graph.py | orchestrate_test.go (stages, approvals, repair budget, resume), test_graph.py (interrupts, resume, bounds) |
+| FR-037 | Retrieval serves source-grounded context with provenance; secrets and build artifacts are excluded; retrieved content cannot override policy | ENFORCED | internal/retrieve | retrieve_test.go (exclusions, provenance, refresh, inertness, empty, guards) |
+| FR-038 | Inference credentials come from the environment at invocation time and are redacted from errors; callers supply the outbound context | INVARIANT | internal/provider | provider_test.go (redaction, env resolution), auth-free by construction |
+| FR-039 | The Astro marketing-site product template builds reproducibly from the engine with the determinism and provenance guarantees of §13 | ENFORCED | product/astro, internal/template/product.go | product_test.go (file set, rendering, determinism, refusals, web standards), acceptance_test.go (slice) |
 
 ### 22.2 Non-functional requirements
 
@@ -702,8 +702,8 @@ write and fails closed on mismatch.
 | NFR-004 | Documentation has no broken internal links | ENFORCED | `validate` link check |
 | NFR-005 | No credentials, machine paths, or fabricated results in tracked files | ENFORCED | `validate` content checks |
 | NFR-006 | The deterministic engine is usable without an AI assistant | INVARIANT | documentation review |
-| NFR-007 | Inference-dependent tests use mocked gateways; ordinary CI requires no network, no credentials, and no paid services | ENFORCED | mocked-gateway suites in `go test ./...` |
-| NFR-008 | Local development requires only the documented Go toolchain plus the orchestration runtime; no cloud account, cluster, or database | RECOMMENDED | documentation review |
+| NFR-007 | Inference-dependent tests use mocked gateways; ordinary CI requires no network, no credentials, and no paid services | ENFORCED | mocked-gateway suites in `go test ./...` and `pytest orchestration/tests` |
+| NFR-008 | Local development requires only the documented Go toolchain plus the orchestration runtime; no cloud account, cluster, or database | RECOMMENDED | documentation review; the orchestration runtime adds a Python venv with pinned, hashed dependencies |
 
 ### 22.3 Test strategy
 
@@ -850,3 +850,34 @@ B6. The product template builds reproducibly with provenance, and
     published output matches the canonical source (FR-039, §13).
 B7. Documentation reflects actual behavior; limitations and deferred
     features are listed; no claim exceeds its evidence.
+
+### 24.6 Known limitations of the shipped slice
+
+Recorded when FR-031…FR-039 gained implementations. Each item states
+what is true today, so no claim in the table above exceeds it.
+
+- **No live-gateway verification.** Inference behavior is proven
+  against a mocked gateway and against the documented contract. No
+  run has executed against a configured FreeLLMAPI deployment, so
+  free-route availability and quotas are unverified in practice.
+- **FR-033 exhaustion handling is a clean stop, not an automatic
+  resume.** When no eligible route answers, the provider returns a
+  classified failure and the run halts with a resumable record; the
+  operator restarts or reconciles. No self-resuming wait exists.
+- **FR-038 allows no outbound allowlist.** Credential handling meets
+  the requirement, but what leaves the machine is whatever the caller
+  passes. Callers must keep context minimal; the engine provides no
+  enforcement.
+- **Two runtimes.** §24.1's Go runner and the LangGraph runtime
+  (ADR-0021) coexist: deterministic stages in Go, the agentic journey
+  in Python. The contract between them is the project document and
+  the MCP surface; no business rule is duplicated without a
+  conformance test (the acceptance suite pins the composition).
+- **Lexical retrieval only.** Paraphrase recall is weak until
+  embeddings land behind the extension point (ADR-0019).
+- **Product template scope.** One coherent Astro stack with no
+  styling framework and no client JavaScript; browser-level
+  accessibility checks are not in CI, and `.astro` frontmatter has no
+  typecheck until `@astrojs/check` supports TypeScript 7.
+- **Publication target undecided.** Nothing in the engine publishes
+  the product template; that remains an owner decision.

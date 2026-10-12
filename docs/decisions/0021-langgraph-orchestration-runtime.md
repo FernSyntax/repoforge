@@ -1,6 +1,6 @@
 # ADR-0021: LangGraph orchestration runtime alongside the Go runner
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-12
 - Spec: spec.md §24, FR-036 (planned)
 - Implementation: `orchestration/*`
@@ -67,6 +67,6 @@ deterministic stages untouched.
 ## Links
 
 - Issue: #48
-- Pull request: TBD
+- Pull request: #49
 - Tests: `orchestration/tests/test_graph.py` (stubbed LLM, temp dirs, no network)
 - Related decisions: 0018 (superseded), 0016 (provider boundary), 0017 (MCP contract)

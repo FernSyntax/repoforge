@@ -92,6 +92,103 @@ v0.1.0 shipped. No tag, release, or asset is modified.
   required) is the operational step that closes the Branch-Protection
   scorecard finding. See ADR-0015.
 
+## [0.2.0] — unreleased
+
+### Added
+
+- **Project model (FR-031).** Versioned project schema
+  (`schemas/project.schema.yaml` and its derived JSON twin) plus
+  `internal/project`: strict YAML/JSON loading, unknown-field and
+  unknown-version rejection, semantic validation including requirement
+  identifier uniqueness, and deterministic serialization. The project
+  name pattern makes path traversal unrepresentable.
+- **Inference provider (FR-032–FR-034, FR-038).** `internal/provider`
+  talks to any OpenAI-compatible gateway — FreeLLMAPI by default,
+  `FREELLMAPI_BASE_URL` overriding — with a central task routing table
+  (`auto` for every task), runtime availability discovery via the
+  models endpoint, free-only routing with no paid fallback, bounded
+  classified retries honoring `Retry-After`, and credentials read from
+  `FREELLMAPI_KEY` at call time and redacted from every error. An
+  example environment file ships with placeholders only.
+- **MCP server (FR-035).** `repoforge mcp serve` exposes five tools
+  over newline-delimited JSON-RPC 2.0 on stdio: `capabilities`,
+  `project_validate`, `template_build`, `template_verify`, and
+  `product_build`. Arguments are schema-checked, writable paths resolve
+  inside `--allowed-dir` through symlink evaluation, and no remote
+  transport exists. The client-needed protocol subset is stdlib-only
+  (ADR-0017).
+- **Staged orchestration with checkpoints (FR-036).**
+  `internal/orchestrate` runs a project document through explicit
+  stages with atomic file checkpoints, approval bound to the
+  specification digest, a shared repair budget, a completed-action
+  ledger, and failure reports. `orchestrate resume` continues a run
+  without repeating completed external actions.
+- **LangGraph journey (FR-036, ADR-0021).** `orchestration/` adds the
+  agentic journey — world-class intake questions (ICP, audience, tone,
+  keywords, geography, non-goals, success metric), specification
+  drafting, an approval interrupt, the validated project model,
+  generation through the MCP surface, a gateway-driven content pass
+  with rejection and length bounds, verification, bounded repair, and a
+  report — with SQLite checkpoint threads. Dependencies are pinned
+  with hashes; CI installs and tests them offline.
+- **Local retrieval (FR-037).** `internal/retrieve` indexes project
+  sources with allowlist rules that exclude secrets and build
+  artifacts, scores deterministically (filename boost, phrase bonus),
+  reports added/changed/removed paths by content hash, and attaches
+  provenance to every hit. Retrieved content is inert (ADR-0019).
+- **Astro product template (FR-039).** `product/astro` — Astro with
+  strict TypeScript, one design-token layer, zero client JavaScript,
+  zero tracking — rendered by `repoforge astro build` with provenance
+  manifest and the same output-path policy as the governance
+  baseline. `npm ci` from the committed lockfile, `tsc --noEmit`, and
+  `astro build` all pass on the generated tree.
+- **World-class web defaults.** `reset.css` normalizer, answer-first
+  summary, FAQ with labeled replace-me answers, `WebSite` and
+  `FAQPage` JSON-LD without invented URLs, Open Graph and Twitter
+  meta, `public/llms.txt` for answer engines, and robots directives.
+- **Acceptance suite.** `internal/acceptance` proves the composed
+  slice offline: validated document, approved run, built and verified
+  tree, byte-identical rebuild, and the failure path.
+
+### Changed
+
+- `spec.md` §24 defines the platform scope; FR-031…FR-039 and
+  NFR-007/008 now carry implementations and tests (§24.6 records the
+  shipped slice's limitations). Rules in §4, P10, P11, and NFR-006 are
+  amended for the optional agentic layer as text, not by workaround.
+- The MCP surface is five tools, not four (`product_build` added).
+- `internal/mcp` construction gains a product-source binding; the CLI
+  flag `--product-source` mirrors it.
+- ADR-0018 is superseded by ADR-0021 (Go runner for deterministic
+  stages, LangGraph for the agentic journey); ADRs 0020 and 0021 are
+  accepted at merge.
+
+### Security
+
+- Credentials travel only in the `Authorization` header from process
+  environment, are redacted from all error output, and never enter
+  checkpoints or logs.
+- The `Product` template ships no analytics, no third-party scripts,
+  and no client-side JavaScript by default.
+- Filesystem safety now carries two boundaries on the MCP path (server
+  root containment plus the engine output policy), with traversal and
+  symlink-escape tests.
+- `actions/setup-python` was reviewed and pinned by full SHA for the
+  new Python CI job; all Python dependencies are pinned with hashes.
+
+### Known limitations
+
+- Inference is verified only against mocked gateways and the documented
+  contract; no live-gateway run has been executed.
+- Route exhaustion stops cleanly and records a resumable failure; it
+  does not self-resume.
+- Callers, not the engine, bound what context leaves the machine.
+- Retrieval is lexical; paraphrase recall awaits embeddings.
+- One Astro stack; no styling framework, no client JS by default.
+- Browser-level accessibility checks are not in CI, and `.astro`
+  frontmatter is not typechecked (awaiting upstream TypeScript 7).
+- The product template's publication target is undecided.
+
 ## [0.1.0] — 2026-10-10
 
 First public release.
