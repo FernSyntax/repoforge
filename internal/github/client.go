@@ -1,3 +1,7 @@
+// Copyright the repoforge contributors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Package github is the client boundary for the GitHub REST API, which
 // is the source of truth for remote repository state (spec.md §7).
 //

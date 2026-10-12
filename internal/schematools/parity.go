@@ -1,3 +1,7 @@
+// Copyright the repoforge contributors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Package schematools proves that each schema's canonical YAML form and
 // its derived JSON translation parse to identical documents.
 //
