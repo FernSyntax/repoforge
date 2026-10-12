@@ -242,15 +242,18 @@ Exit `0` created · `1` gate red or `gh` failed · `2` usage error.
 ## repoforge mcp serve
 
 ```
-repoforge mcp serve --allowed-dir DIR [--template-source DIR]
+repoforge mcp serve --allowed-dir DIR [--template-source DIR] [--product-source DIR]
 ```
 
-Serves the four approved MCP tools over stdio (newline-delimited
+Serves the five approved MCP tools over stdio (newline-delimited
 JSON-RPC 2.0, protocol `2025-11-25`): `capabilities`,
-`project_validate`, `template_build`, and `template_verify`
-(spec.md §24, FR-035; ADR-0017). Writable tool paths resolve inside
+`project_validate`, `template_build`, `product_build`, and
+`template_verify`
+(spec.md §24, FR-035; ADR-0017, ADR-0021). Writable tool paths resolve inside
 `--allowed-dir` through symlink evaluation, on top of the engine's
-own output policy; `--template-source` defaults to `template/`. Runs
+own output policy; `--template-source` defaults to `template/` and
+`--product-source` to `product/astro` (empty disables
+`product_build`). Runs
 until stdin closes. There is no remote transport. Exit `0` clean
 shutdown · `2` usage, configuration, or serve error.
 

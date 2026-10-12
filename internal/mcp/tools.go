@@ -30,14 +30,17 @@ type tool struct {
 type registry struct {
 	root string
 	src  string
+	// product is the Astro product template source. Empty means the
+	// product_build tool is unconfigured and reports so.
+	product string
 }
 
-func newRegistry(root, src string) *registry {
-	return &registry{root: root, src: src}
+func newRegistry(root, src, product string) *registry {
+	return &registry{root: root, src: src, product: product}
 }
 
 func (r *registry) describe() []any {
-	out := make([]any, 0, 4)
+	out := make([]any, 0, 5)
 	for _, t := range r.all() {
 		out = append(out, map[string]any{
 			"name":        t.name,
@@ -62,7 +65,7 @@ func (r *registry) all() []tool {
 						map[string]any{"name": "repoforge", "version": config.SchemaVersion},
 						map[string]any{"name": "project", "version": project.SchemaVersion},
 					},
-					"tools": []string{"capabilities", "project_validate", "template_build", "template_verify"},
+					"tools": []string{"capabilities", "project_validate", "template_build", "template_verify", "product_build"},
 				}), false, nil
 			},
 		},
@@ -159,6 +162,45 @@ func (r *registry) all() []tool {
 					return marshalJSON(map[string]any{"ok": false, "issues": issues, "error": err.Error()}), true, nil
 				}
 				return marshalJSON(map[string]any{"ok": len(issues) == 0, "issues": issues}), len(issues) != 0, nil
+			},
+		},
+		{
+			name:        "product_build",
+			description: "Render the Astro product source into a directory inside the allowed root. Same contract as template_build with the unresolved-placeholder gate; refuses traversal, absolute paths, and non-empty destinations unless force is set.",
+			schema: objSchema(map[string]any{
+				"outDir": map[string]any{"type": "string", "description": "Destination relative to the allowed root."},
+				"vars":   map[string]any{"type": "object", "description": "Product variables (string values)."},
+				"force":  map[string]any{"type": "boolean", "description": "Replace a non-empty destination."},
+			}, []string{"outDir"}),
+			call: func(args map[string]any) (string, bool, error) {
+				if r.product == "" {
+					return "", false, fmt.Errorf("product_build is not configured on this server")
+				}
+				rel, err := strArg(args, "outDir", true)
+				if err != nil {
+					return "", false, err
+				}
+				vars, err := varsArg(args)
+				if err != nil {
+					return "", false, err
+				}
+				force, err := boolArg(args, "force")
+				if err != nil {
+					return "", false, err
+				}
+				dest, err := resolveWithin(r.root, rel)
+				if err != nil {
+					return "", false, err
+				}
+				files, err := template.LoadSource(r.product)
+				if err != nil {
+					return marshalJSON(map[string]any{"ok": false, "error": err.Error()}), true, nil
+				}
+				issues, err := template.BuildProduct(files, r.product, dest, vars, template.BuildOptions{Force: force})
+				if err != nil {
+					return marshalJSON(map[string]any{"ok": false, "issues": issues, "error": err.Error()}), true, nil
+				}
+				return marshalJSON(map[string]any{"ok": true, "outDir": rel}), false, nil
 			},
 		},
 	}

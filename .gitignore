@@ -16,6 +16,12 @@ coverage.*
 !.env.example
 *.token
 
+# Python runtime artifacts (dependencies stay virtualenv-local;
+# orchestration/requirements.txt carries the hashed pins).
+__pycache__/
+*.py[cod]
+.orchestration-venv/
+
 # Product template install and build outputs (reproducible via the
 # committed lockfile; never source, never committed).
 product/astro/node_modules/
