@@ -1,8 +1,14 @@
+// Copyright the repoforge contributors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package config
 
 import (
 	"bytes"
+	"errors"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -81,6 +87,80 @@ func TestGovernanceProfilesRequireIssuesAndWiki(t *testing.T) {
 	if _, err := LoadGovernance(bytes.NewReader([]byte(
 		"version: v1\nprofile: nope\nrepository:\n  features:\n    issues: true\n    wiki: true\n"))); err == nil {
 		t.Error("an unknown profile must be rejected")
+	}
+}
+
+// TestLoadGovernanceProfileNames pins profile resolution: every
+// profile the governance schema enumerates (baseline, solo, team,
+// strict) must load through the strict decoder, and an unknown
+// profile must be rejected by name — doctor resolves profiles by
+// this exact set, so a typo here would silently bootstrap the wrong
+// ruleset.
+func TestLoadGovernanceProfileNames(t *testing.T) {
+	doc := func(profile string) string {
+		return "version: v1\nprofile: " + profile +
+			"\nrepository:\n  features:\n    issues: true\n    wiki: true\n"
+	}
+	for _, profile := range []string{"baseline", "solo", "team", "strict"} {
+		g, err := LoadGovernance(strings.NewReader(doc(profile)))
+		if err != nil {
+			t.Errorf("profile %q: %v", profile, err)
+			continue
+		}
+		if g.Profile != profile {
+			t.Errorf("profile = %q, want %q", g.Profile, profile)
+		}
+	}
+	_, err := LoadGovernance(strings.NewReader(doc("wizard")))
+	if err == nil {
+		t.Fatal("an unknown profile must be rejected")
+	}
+	if !strings.Contains(err.Error(), `unknown profile "wizard" (want baseline, solo, team, strict)`) {
+		t.Errorf("error = %q, want it to name the unknown profile and the valid set", err)
+	}
+}
+
+// TestLoadGovernanceVersionCheck pins that only schema version v1 is
+// accepted: a future document version must fail loudly rather than
+// decode into a shape this tool misreads.
+func TestLoadGovernanceVersionCheck(t *testing.T) {
+	_, err := LoadGovernance(strings.NewReader(
+		"version: v2\nprofile: solo\nrepository:\n  features:\n    issues: true\n    wiki: true\n"))
+	if err == nil {
+		t.Fatal("an unknown governance version must be rejected")
+	}
+	if !strings.Contains(err.Error(), `unknown version "v2"`) {
+		t.Errorf("error = %q, want it to name the version", err)
+	}
+}
+
+// errReader fails every read, standing in for an unreadable source
+// (a closed file, a broken pipe) so the read-error path is covered
+// deterministically without touching the filesystem.
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, errors.New("read failed") }
+
+// TestLoadGovernanceReadError pins that a source that cannot be read
+// at all surfaces its error instead of being mistaken for an empty
+// (and therefore invalid) document.
+func TestLoadGovernanceReadError(t *testing.T) {
+	if _, err := LoadGovernance(errReader{}); err == nil {
+		t.Fatal("an unreadable source must fail")
+	}
+}
+
+// TestLoadGovernanceParseError pins the parse-error wrap: a document
+// that is not decodable YAML fails with the "governance document:"
+// prefix so callers can tell a broken file from a rejected
+// invariant.
+func TestLoadGovernanceParseError(t *testing.T) {
+	_, err := LoadGovernance(strings.NewReader("version: [v1\n"))
+	if err == nil {
+		t.Fatal("malformed YAML must be rejected")
+	}
+	if !strings.Contains(err.Error(), "governance document:") {
+		t.Errorf("error = %q, want the governance document prefix", err)
 	}
 }
 

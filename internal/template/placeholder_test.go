@@ -1,3 +1,7 @@
+// Copyright the repoforge contributors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package template
 
 // ph renders a template placeholder at runtime rather than as a literal

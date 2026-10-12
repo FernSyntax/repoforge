@@ -1,3 +1,7 @@
+// Copyright the repoforge contributors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package github
 
 import (
@@ -197,3 +201,197 @@ func TestRulesetDriftOrderIsStable(t *testing.T) {
 		t.Fatalf("expected enforcement + 3 missing + 1 extra, got %v", first)
 	}
 }
+
+// --- conditions ------------------------------------------------------------
+
+// TestRulesetDriftWithoutConditions proves conditions are optional:
+// a payload that declares none must not report drift against a
+// ruleset that happens to carry them — the policy simply does not
+// manage ref scoping.
+func TestRulesetDriftWithoutConditions(t *testing.T) {
+	want := conformingPayload()
+	want.Conditions = nil
+	existing := detailOf(t, want)
+	if reasons := RulesetDrift(existing, want); len(reasons) != 0 {
+		t.Fatalf("a payload without conditions must not drift: %v", reasons)
+	}
+}
+
+// TestRulesetDriftDetectsExcludeChange proves both halves of the ref
+// condition are compared: excluding a ref is as much policy as
+// including one, and a one-sided check would let an exclusion drift
+// forever.
+func TestRulesetDriftDetectsExcludeChange(t *testing.T) {
+	want := conformingPayload()
+	existing := detailOf(t, want)
+	existing.Conditions.RefName.Include = []string{"~ALL"}
+	existing.Conditions.RefName.Exclude = []string{"release/*"}
+	reasons := RulesetDrift(existing, want)
+	if len(reasons) != 2 {
+		t.Fatalf("reasons = %v, want the include and exclude changes", reasons)
+	}
+	if !strings.Contains(reasons[0], "include is [~ALL], policy wants [~DEFAULT_BRANCH]") {
+		t.Errorf("reasons[0] = %q", reasons[0])
+	}
+	if !strings.Contains(reasons[1], "exclude is [release/*], policy wants []") {
+		t.Errorf("reasons[1] = %q", reasons[1])
+	}
+}
+
+// --- parameterized rules ---------------------------------------------------
+
+// TestRulesetDriftReportsMissingParameters proves a rule present but
+// stripped of its parameters is drift, not silence: the comparison
+// would otherwise pass a ruleset that cannot enforce anything.
+func TestRulesetDriftReportsMissingParameters(t *testing.T) {
+	want := conformingPayload()
+	existing := detailOf(t, want)
+	existing.Rules[0].Parameters = nil // pull_request without parameters
+	reasons := RulesetDrift(existing, want)
+	if len(reasons) != 1 || !strings.Contains(reasons[0], `rule "pull_request" has no parameters`) {
+		t.Fatalf("reasons = %v", reasons)
+	}
+	existing = detailOf(t, want)
+	existing.Rules[1].Parameters = nil // required_status_checks without parameters
+	reasons = RulesetDrift(existing, want)
+	if len(reasons) != 1 || !strings.Contains(reasons[0], `rule "required_status_checks" has no parameters`) {
+		t.Fatalf("reasons = %v", reasons)
+	}
+}
+
+// TestRulesetDriftDetectsPullRequestBoolChange proves the boolean
+// parameters RepoForge sets are each compared: a hand edit to any one
+// of them is drift, and comparing only the review count would miss a
+// protection being quietly turned off.
+func TestRulesetDriftDetectsPullRequestBoolChange(t *testing.T) {
+	want := conformingPayload()
+	existing := detailOf(t, want)
+	existing.Rules[0].Parameters = json.RawMessage(`{
+		"allowed_merge_methods": ["squash", "merge"],
+		"required_review_thread_resolution": false,
+		"dismiss_stale_reviews_on_push": true,
+		"required_approving_review_count": 0
+	}`)
+	reasons := RulesetDrift(existing, want)
+	if len(reasons) != 3 {
+		t.Fatalf("reasons = %v, want the two booleans and the merge methods", reasons)
+	}
+	for _, w := range []string{
+		"pull_request.dismiss_stale_reviews_on_push is true, policy wants false",
+		"pull_request.required_review_thread_resolution is false, policy wants true",
+		"pull_request.allowed_merge_methods is [squash, merge], policy wants [squash]",
+	} {
+		found := false
+		for _, r := range reasons {
+			if strings.Contains(r, w) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("missing reason %q in %v", w, reasons)
+		}
+	}
+}
+
+// TestRulesetDriftAcceptsOverlayParameterShapes proves the want side
+// accepts both shapes a parameter can arrive in: []map[string]any
+// from the desired-rulesets overlay and a plain int, not only the
+// float64 JSON decoding yields — otherwise an overlay-configured
+// policy would drift against itself.
+func TestRulesetDriftAcceptsOverlayParameterShapes(t *testing.T) {
+	want := conformingPayload()
+	want.Rules[0].Parameters["allowed_merge_methods"] = []string{"squash"}
+	want.Rules[0].Parameters["required_approving_review_count"] = 0
+	want.Rules[1].Parameters["required_status_checks"] = []map[string]any{{"context": "verify"}}
+	existing := detailOf(t, want)
+	if reasons := RulesetDrift(existing, want); len(reasons) != 0 {
+		t.Fatalf("the overlay shapes must compare equal: %v", reasons)
+	}
+}
+
+// TestRulesetDriftSkipsUndeclaredContexts proves a policy that
+// declares no status-check contexts is not misread as "zero
+// contexts": the key is simply absent from the payload, and drift
+// against an absent parameter would be unfixable by any payload
+// change.
+func TestRulesetDriftSkipsUndeclaredContexts(t *testing.T) {
+	want := conformingPayload()
+	delete(want.Rules[1].Parameters, "required_status_checks")
+	existing := detailOf(t, want)
+	if reasons := RulesetDrift(existing, want); len(reasons) != 0 {
+		t.Fatalf("an absent context list must be skipped: %v", reasons)
+	}
+}
+
+// TestRulesetDriftIgnoresUnusableParameterValues proves a parameter
+// the policy cannot express is skipped rather than misread: a
+// non-numeric review count is not "zero", and treating it as such
+// would report drift that no payload change can fix. The existing
+// side stays a clean payload — a corrupt existing is a corrupt
+// repository, not a policy question.
+func TestRulesetDriftIgnoresUnusableParameterValues(t *testing.T) {
+	existing := detailOf(t, conformingPayload())
+	want := conformingPayload()
+	want.Rules[0].Parameters["required_approving_review_count"] = "two"
+	if reasons := RulesetDrift(existing, want); len(reasons) != 0 {
+		t.Fatalf("an unexpressible parameter must be skipped: %v", reasons)
+	}
+}
+
+// TestRulesetDriftReportsUnusableMergeMethodList proves a non-list
+// allowed_merge_methods cannot compare equal: the existing methods
+// are real, the policy's value decodes to nothing, and silence here
+// would hide a policy that cannot be applied. Unlike the review
+// count, this parameter cannot be skipped: an empty want list is a
+// real (drifted) state, not an unreadable one. The existing side
+// stays a clean payload — a corrupt existing is a corrupt
+// repository, not a policy question.
+func TestRulesetDriftReportsUnusableMergeMethodList(t *testing.T) {
+	existing := detailOf(t, conformingPayload())
+	want := conformingPayload()
+	want.Rules[0].Parameters["allowed_merge_methods"] = "squash"
+	reasons := RulesetDrift(existing, want)
+	if len(reasons) != 1 ||
+		!strings.Contains(reasons[0], "allowed_merge_methods is [squash], policy wants []") {
+		t.Fatalf("reasons = %v", reasons)
+	}
+}
+
+// --- bypass actors ---------------------------------------------------------
+
+// TestRulesetDriftReportsUnknownBypassActorShape proves the bypass
+// comparison covers actor shapes the payload does not manage: a
+// DeployKey actor (no id, no mode) must still be named, using the
+// documented defaults, or a hand-added bypass would go unreported.
+func TestRulesetDriftReportsUnknownBypassActorShape(t *testing.T) {
+	want := conformingPayload()
+	existing := detailOf(t, want)
+	existing.BypassActors = &[]RulesetBypassActor{{ActorType: "DeployKey"}}
+	reasons := RulesetDrift(existing, want)
+	if len(reasons) != 1 ||
+		!strings.Contains(reasons[0], "bypass actors are [DeployKey/nil/always]") {
+		t.Fatalf("reasons = %v", reasons)
+	}
+}
+
+// TestRulesetDriftComparesBypassActorsOfEqualCount proves the
+// comparison is by content, not by count: swapping one actor for
+// another is drift even though both sides carry exactly one.
+func TestRulesetDriftComparesBypassActorsOfEqualCount(t *testing.T) {
+	want := conformingPayload()
+	want.BypassActors = []RulesetBypassActor{
+		{ActorID: intPtr(43), ActorType: "RepositoryRole", BypassMode: "always"},
+	}
+	existing := detailOf(t, want)
+	id := 42
+	existing.BypassActors = &[]RulesetBypassActor{
+		{ActorID: &id, ActorType: "RepositoryRole", BypassMode: "always"},
+	}
+	reasons := RulesetDrift(existing, want)
+	if len(reasons) != 1 ||
+		!strings.Contains(reasons[0], "bypass actors are [RepositoryRole/42/always], policy wants [RepositoryRole/43/always]") {
+		t.Fatalf("reasons = %v", reasons)
+	}
+}
+
+func intPtr(n int) *int { return &n }

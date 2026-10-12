@@ -1,7 +1,12 @@
+// Copyright the repoforge contributors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -335,5 +340,222 @@ func TestRequestHeaders(t *testing.T) {
 	}
 	if !strings.HasPrefix(seen.Get("User-Agent"), "repoforge/") {
 		t.Errorf("User-Agent = %q", seen.Get("User-Agent"))
+	}
+}
+
+// --- error classification -------------------------------------------------
+
+// TestClassifiersAnswerNoForNonAPIErrors proves the two classifiers
+// only ever answer "yes" for a real APIError: a caller branching on
+// IsNotFound must not read a nil or foreign error as a 404, and a 403
+// that is not rate-limit exhaustion must never be reported as one.
+func TestClassifiersAnswerNoForNonAPIErrors(t *testing.T) {
+	for _, err := range []error{nil, errors.New("dial tcp: connection refused")} {
+		if IsNotFound(err) {
+			t.Errorf("IsNotFound(%v) = true, want false", err)
+		}
+		if IsRateLimited(err) {
+			t.Errorf("IsRateLimited(%v) = true, want false", err)
+		}
+	}
+	if IsNotFound(&APIError{StatusCode: 403}) {
+		t.Error("a 403 must not classify as not-found")
+	}
+	if IsRateLimited(&APIError{StatusCode: 403}) {
+		t.Error("a 403 with rate budget intact must not classify as rate-limited")
+	}
+}
+
+// TestErrorAsSeesThroughWrapping proves the classifiers unwrap: every
+// caller wraps client errors with context, and if the wrapper hid the
+// APIError, drift reporting could not tell a missing ruleset from a
+// broken one.
+func TestErrorAsSeesThroughWrapping(t *testing.T) {
+	ae := &APIError{StatusCode: 404, Message: "Not Found"}
+	for _, err := range []error{
+		ae,
+		fmt.Errorf("github: reading issue #1: %w", ae),
+		fmt.Errorf("outer: %w", fmt.Errorf("inner: %w", ae)),
+	} {
+		if !IsNotFound(err) {
+			t.Errorf("IsNotFound(%v) = false, want true", err)
+		}
+	}
+	var got *APIError
+	if errorAs(nil, &got) {
+		t.Error("errorAs(nil) must report false")
+	}
+	if got != nil {
+		t.Errorf("errorAs(nil) left the target at %v", got)
+	}
+}
+
+// --- retry and transport edges --------------------------------------------
+
+// TestRetryLoopStopsOnCancelledContext proves the retry schedule
+// honors cancellation: an operator who cancels a hung run must get
+// context.Canceled, not a backoff that outlives the cancellation.
+func TestRetryLoopStopsOnCancelledContext(t *testing.T) {
+	c, _ := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(503)
+	}))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := c.GetRepository(ctx, "o", "r")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+// TestGetFailsAfterBoundedRetries proves a GET that never reaches the
+// server fails once the retry budget is spent: the budget is a
+// feature, not a loop, and the transport error is what the caller
+// sees.
+func TestGetFailsAfterBoundedRetries(t *testing.T) {
+	transport := &countingFailingTransport{}
+	c := New(
+		WithBaseURL("http://repoforge.invalid"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+		WithRetryBackoff(time.Millisecond),
+	)
+	_, err := c.GetRepository(context.Background(), "o", "r")
+	if err == nil {
+		t.Fatal("a GET that never reaches the server must fail")
+	}
+	if !strings.Contains(err.Error(), "request failed") {
+		t.Errorf("err = %v, want the transport failure", err)
+	}
+	if got := transport.calls.Load(); got != 3 {
+		t.Errorf("attempts = %d, want 3 (one try plus maxRetries)", got)
+	}
+}
+
+// countingFailingTransport always fails at the transport level, so no
+// response is ever read — the case the retry budget exists for.
+type countingFailingTransport struct{ calls atomic.Int32 }
+
+func (t *countingFailingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	t.calls.Add(1)
+	return nil, errors.New("dial tcp: connection refused")
+}
+
+// --- decode edges ----------------------------------------------------------
+
+// TestMalformedSuccessBodyIsAnError proves a 2xx with an undecodable
+// body fails loudly: a truncated or proxied response must not look
+// like an empty repository.
+func TestMalformedSuccessBodyIsAnError(t *testing.T) {
+	c, _ := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, "<html>login</html>")
+	}))
+	_, err := c.GetRepository(context.Background(), "o", "r")
+	if err == nil {
+		t.Fatal("a 2xx with a malformed body must fail")
+	}
+	if !strings.Contains(err.Error(), "decoding response") {
+		t.Errorf("err = %v, want a decoding failure", err)
+	}
+}
+
+// TestEmptyErrorBodyFallsBackToStatusText proves an empty error body
+// still yields an actionable message rather than an empty one.
+func TestEmptyErrorBodyFallsBackToStatusText(t *testing.T) {
+	c, _ := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+	}))
+	_, err := c.GetRepository(context.Background(), "o", "r")
+	if err == nil {
+		t.Fatal("a 500 must fail")
+	}
+	if !strings.Contains(err.Error(), http.StatusText(500)) {
+		t.Errorf("err = %v, want the status text", err)
+	}
+}
+
+// TestTokenlessClientNeverSplicesRedactionMarker proves the redaction
+// path is skipped without a token: replacing the empty string would
+// splice the marker between every character of a perfectly good error
+// body, so the credential-free planning path must pass bodies through
+// verbatim.
+func TestTokenlessClientNeverSplicesRedactionMarker(t *testing.T) {
+	var authSeen string
+	_, srv := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authSeen = r.Header.Get("Authorization")
+		w.WriteHeader(422)
+		fmt.Fprint(w, `{"message": "Validation Failed"}`)
+	}))
+	c := New(WithBaseURL(srv.URL), WithRetryBackoff(time.Millisecond))
+	_, err := c.GetRepository(context.Background(), "o", "r")
+	if err == nil {
+		t.Fatal("a 422 must fail")
+	}
+	if authSeen != "" {
+		t.Errorf("Authorization = %q, want none for a credential-free client", authSeen)
+	}
+	if !strings.Contains(err.Error(), "Validation Failed") {
+		t.Errorf("err = %v, want the server's message verbatim", err)
+	}
+	if strings.Contains(err.Error(), "[REDACTED]") {
+		t.Errorf("err = %v, must not splice a redaction marker", err)
+	}
+}
+
+// TestMalformedBaseURLFailsAsRequestBuilding proves an unparsable
+// endpoint is reported as a request-building failure rather than a
+// request to a guessed URL.
+func TestMalformedBaseURLFailsAsRequestBuilding(t *testing.T) {
+	c := New(WithBaseURL("http://%zz-invalid"))
+	_, err := c.GetRepository(context.Background(), "o", "r")
+	if err == nil {
+		t.Fatal("an unparsable base URL must fail")
+	}
+	if !strings.Contains(err.Error(), "building request") {
+		t.Errorf("err = %v, want a request-building failure", err)
+	}
+}
+
+// --- pagination ------------------------------------------------------------
+
+// TestGetAllSeparatorFollowsPathShape proves pagination appends with
+// the separator the path's shape demands: a "?" on a path that
+// already carries a query would drop the caller's parameters.
+func TestGetAllSeparatorFollowsPathShape(t *testing.T) {
+	c, _ := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("state"); got != "open" {
+			t.Errorf("state = %q, want the caller's parameter preserved", got)
+		}
+		if got := r.URL.Query().Get("page"); got != "1" {
+			t.Errorf("page = %q, want 1", got)
+		}
+		fmt.Fprint(w, `[{"number": 7, "state": "open"}]`)
+	}))
+	items, err := getAll[struct {
+		Number int    `json:"number"`
+		State  string `json:"state"`
+	}](c, context.Background(), "/repos/o/r/issues?state=open")
+	if err != nil {
+		t.Fatalf("getAll: %v", err)
+	}
+	if len(items) != 1 || items[0].Number != 7 {
+		t.Fatalf("items = %+v, want the decoded page", items)
+	}
+}
+
+// TestListCallsSurfaceAPIErrors proves a failing list page fails the
+// whole call: pagination must not return a partial set that looks
+// complete.
+func TestListCallsSurfaceAPIErrors(t *testing.T) {
+	c, _ := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+	}))
+	if _, err := c.ListLabels(context.Background(), "o", "r"); err == nil {
+		t.Error("a failing label page must fail the call")
+	}
+	if _, err := c.ListRulesets(context.Background(), "o", "r"); err == nil {
+		t.Error("a failing ruleset page must fail the call")
+	}
+	if _, err := c.ListTopics(context.Background(), "o", "r"); err == nil {
+		t.Error("a failing topic read must fail the call")
 	}
 }
