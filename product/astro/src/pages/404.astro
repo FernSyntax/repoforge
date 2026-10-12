@@ -1,0 +1,13 @@
+---
+import Base from "../layouts/Base.astro";
+import { SITE_NAME } from "../site";
+---
+
+<Base title={"Not found — " + SITE_NAME} description="The requested page does not exist.">
+  <section aria-labelledby="missing-heading">
+    <h1 id="missing-heading">Page not found</h1>
+    <p>
+      The page you asked for is not here. <a href="/">Return home</a>.
+    </p>
+  </section>
+</Base>

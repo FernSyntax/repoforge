@@ -254,6 +254,21 @@ own output policy; `--template-source` defaults to `template/`. Runs
 until stdin closes. There is no remote transport. Exit `0` clean
 shutdown · `2` usage, configuration, or serve error.
 
+## repoforge astro build
+
+```
+repoforge astro build --out DIR [--product-source DIR] [--var key=value ...] [--force]
+```
+
+Renders the canonical Astro product template (`product/astro` by
+default) into a new repository tree: required variables
+(`ProjectName`, `Description`) applied, unresolved placeholders
+refused, provenance manifest recorded, destination published
+atomically (spec.md §24, FR-039; ADR-0020). Same safety contract as
+`template build`: validated variables, resolved destination, and no
+silent overwrite — a non-empty destination needs `--force`. Exit `0`
+built · `1` validation findings · `2` usage error.
+
 ## repoforge release ready
 
 ```
