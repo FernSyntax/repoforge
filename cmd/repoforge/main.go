@@ -1,3 +1,7 @@
+// Copyright the repoforge contributors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Command repoforge is the RepoForge CLI entry point.
 //
 // Implemented commands: validate (spec.md §12), doctor (spec.md §11), bootstrap

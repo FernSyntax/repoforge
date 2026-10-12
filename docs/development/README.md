@@ -19,6 +19,10 @@ test, and verification workflows.
   customize, converge, work the standard way
 - [maintainer-workflow.md](maintainer-workflow.md) — the engine
   contributor loop: issue to squash-merge with all gates
+- [roles.md](roles.md) — the roles, their responsibilities, and how the
+  project continues if any one person is unavailable
+- [roadmap.md](roadmap.md) — what the project intends to do, and
+  explicitly not to do, over the next year
 
 These documents are normative extensions of spec.md §§6, 14, and 20
 (spec.md §6.10).

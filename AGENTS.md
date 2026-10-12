@@ -95,5 +95,7 @@ a red run.
 
 Branching, commits, PRs, releases, hooks: `docs/development/`
 (git-workflow.md is the index). Design authority: [DESIGN.md](DESIGN.md).
+Roles, responsibilities, and continuity: [docs/development/roles.md](docs/development/roles.md).
+Direction: [docs/development/roadmap.md](docs/development/roadmap.md).
 These are normative extensions of spec.md — consult them before
 touching those areas.

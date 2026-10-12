@@ -27,6 +27,13 @@ history: there is no earlier version of *this* product to record.
   creation); `repoforge release ready --tag` is the side-effect-free
   pre-tag gate. See ADR-0012.
 
+- **OpenSSF Baseline conformance statement.** `docs/security/osps-baseline.md`
+  records every Baseline Level 3 control with a pointer to its
+  evidence, and SECURITY.md and CONTRIBUTING.md gain the policies the
+  badge requires: secrets handling, collaborator access, the test
+  policy for major changes, and the dependency and scan remediation
+  thresholds.
+
 ### Added
 
 - **Agent-proof contribution gates.** `repoforge pr scaffold --issue N`
@@ -61,6 +68,29 @@ v0.1.0 shipped. No tag, release, or asset is modified.
 - **Archive names use lowercase OS spellings.** The GoReleaser matrix
   and every documented asset name now agree
   (`repoforge_X.Y.Z_linux_amd64.tar.gz`, never `Linux`).
+- **Publication privilege separation.** The template-publication
+  workflow is split into an unprivileged build job and a privileged
+  publish job: the checkout ref is data resolved through the API, never
+  an event expression, so the App private key never coexists with the
+  execution of release-source code. Fixes the CodeQL
+  untrusted-checkout finding and the Scorecard dangerous-workflow
+  finding. See ADR-0014.
+- **Security policy links its reporting mechanism.** Both SECURITY.md
+  files (engine and template) link GitHub's private-vulnerability-
+  reporting documentation, which is what the Scorecard security-policy
+  check scores.
+
+### Changed
+
+- **Maximal team profile.** The team profile now requires last-push
+  approval alongside one non-author approval, code-owner review, and
+  stale-review dismissal, and the CodeQL analyses become required
+  status checks wherever the contract requires code scanning. The
+  engine repository adopts the team profile; applying the resulting
+  ruleset (one non-author approval, code-owner review, stale-review
+  dismissal, last-push approval, `Analyze (go)` and `Analyze (actions)`
+  required) is the operational step that closes the Branch-Protection
+  scorecard finding. See ADR-0015.
 
 ## [0.1.0] — 2026-10-10
 

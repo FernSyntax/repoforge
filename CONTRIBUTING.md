@@ -77,6 +77,28 @@ instructions and the run fails — it is never skipped silently.
 The same checks run in CI as required status checks. CI is authoritative:
 local checks are developer feedback and can be bypassed.
 
+## Coding standards
+
+The guides for the languages this repository uses, and how each is
+enforced:
+
+- **Go** follows [Effective Go](https://go.dev/doc/effective_go) and
+  the formatting produced by `gofmt`; code is checked with `go vet`.
+  Both run in `scripts/verify` and as required CI checks, so a
+  deviation fails the gate rather than the review.
+- **Shell** follows the [Google Shell Style
+  Guide](https://google.github.io/styleguide/shellguide.html), checked
+  with `shellcheck`.
+- **GitHub Actions workflows** follow the `actionlint` rule set; every
+  third-party action is pinned to a full commit SHA with a version
+  comment.
+- **Documentation and specs** follow RFC 2119 for normative language
+  and the repository's own link and identity rules (spec §8.4):
+  no hardcoded users, orgs, or repository names in shared documents.
+
+Where a guide is silent, the surrounding file decides; consistency
+within a file is itself the standard.
+
 ## Test policy
 
 A major change must add or update automated tests in the same change.

@@ -255,14 +255,12 @@ func TestManifestRejectsUnknownField(t *testing.T) {
 // edits the tree *and* rebuilds the manifest with the tool's own digest
 // algorithm still fails, because the source commit recorded in the
 // manifest cannot produce the edited bytes.
-// TestVerifyCatchesATamperedTreeWithARegeneratedManifest proves the
-// provenance gate is not a self-consistency check. An attacker who
-// edits the tree *and* rebuilds the manifest with the tool's own digest
-// algorithm still fails, because the source commit recorded in the
-// manifest cannot produce the edited bytes.
 //
 // The source is a local git repository, so the proof needs no network
-// and is deterministic.
+// and is deterministic. The manifest records a portable URL — a built
+// template must never carry a machine-specific path — and the local
+// source is passed as the fetch override, which selects where to fetch
+// from without rewriting what the manifest says.
 func TestVerifyCatchesATamperedTreeWithARegeneratedManifest(t *testing.T) {
 	canonical, err := LoadSource(filepath.Join("..", "..", "template"))
 	if err != nil {
@@ -308,7 +306,7 @@ func TestVerifyCatchesATamperedTreeWithARegeneratedManifest(t *testing.T) {
 		RepoForgeVersion: "v1.2.3",
 		SourceRef:        "v1.2.3",
 		SourceCommit:     commit,
-		SourceURL:        src,
+		SourceURL:        "https://example.invalid/repoforge",
 	}
 	out := filepath.Join(t.TempDir(), "out")
 	if _, err := Build(canonical, filepath.Join(src, "template"), out, nil,
@@ -316,8 +314,9 @@ func TestVerifyCatchesATamperedTreeWithARegeneratedManifest(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 
-	// A faithful build verifies.
-	if issues, err := Verify(out, "", false); err != nil {
+	// A faithful build verifies: the fetch override points at the local
+	// source, while the rebuilt manifest records the manifest's own URL.
+	if issues, err := Verify(out, src, false); err != nil {
 		t.Fatalf("a faithful build must verify: %v (%v)", err, issues)
 	}
 
@@ -338,7 +337,7 @@ func TestVerifyCatchesATamperedTreeWithARegeneratedManifest(t *testing.T) {
 
 	// The tree and its manifest now agree with each other. Rebuilding
 	// from the recorded source is the only thing that can catch it.
-	issues, err := Verify(out, "", false)
+	issues, err := Verify(out, src, false)
 	if err != nil {
 		t.Fatalf("Verify reported an environmental failure rather than the tampering: %v", err)
 	}

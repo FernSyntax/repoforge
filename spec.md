@@ -89,10 +89,13 @@ P8. **No stored credentials, ever.** Credentials come from the
 P9. **CI is authoritative.** Local checks are developer feedback; merge
     gating happens in CI only.
 P10. **Useful to humans without AI.** All behavior is documented in
-    plain language; no workflow requires an AI assistant.
+     plain language; no workflow requires an AI assistant. The
+     deterministic engine keeps this property in v0.2.0; the optional
+     orchestration layer (§24) requires configured inference.
 P11. **Small dependency surface.** Go standard library wherever
-    practical; every third-party dependency requires written
-    justification in an ADR.
+     practical; every third-party dependency requires written
+     justification in an ADR. The same bar applies to v0.2.0
+     orchestration dependencies.
 
 ## 3. Scope
 
@@ -111,6 +114,12 @@ In scope:
 - Release tooling for the CLI and the template, including checksums,
   SBOMs, and build provenance.
 - Documentation, ADRs, CI, and developer hooks for all of the above.
+- For v0.2.0 (planned, see §24): a versioned project-model schema, a
+  model-provider abstraction with a free-only inference policy, a
+  narrow MCP tool surface over the deterministic engine, an
+  orchestration boundary with persistent checkpoints and approval
+  gates, local-first retrieval over project sources, and an Astro
+  marketing-site template as the first product target.
 
 ## 4. Non-goals
 
@@ -125,6 +134,14 @@ In scope:
 - Organization-wide fleet dashboards. v0.1 operates on one repository
   at a time.
 - Backward compatibility with other repository-management tools.
+
+For v0.2.0, three non-goals above are qualified (rationale in §24.2):
+the engine stays language-agnostic but v0.2.0 ships one supported
+product template; orchestration MAY implement product-specific
+requirements inside a generated repository under human approval;
+inference is a client of a configured gateway, not a RepoForge-hosted
+service. Operating RepoForge itself as a hosted service remains a
+non-goal.
 
 ## 5. Repository model
 
@@ -509,7 +526,7 @@ In scope:
 | --- | --- |
 | A token is committed | `validate` and `template` scan for token- and key-shaped material; secret scanning with push protection is part of the standard. |
 | A token appears in output | Error paths construct messages from fixed text; the token is never interpolated. Tests assert redaction. |
-| Template tampering | The immutable manifest plus rebuild-from-source verification (§13.7). |
+| Template tampering | The immutable manifest plus rebuild-from-source verification (FR-011, FR-012). |
 | An untrusted pull request reaches a publishing credential | Pull-request workflows never receive the template-publishing credential; publication runs only on the trusted release workflow, on the expected repository and tag. The workflow separates the build from the credential: the job that executes the release source holds no secrets and no id-token, and the credential exists only in a job that executes default-branch engine code and the verified artifact (§14.3.3). |
 | A dependency changes under the build | Actions are pinned to full commit SHAs; downloaded tools are verified against published SHA-256 sums; Go module integrity is checked. |
 | A diverted wiki destination | The publish path verifies the clone's origin against the requested repository before writing, and never force-pushes. |
@@ -622,7 +639,7 @@ write and fails closed on mismatch.
        Installation and removal are idempotent, and removal touches only
        hooks the project installed.
 
-21.6. Template synchronization (§13.8) is automated end to end: the
+21.6. Template synchronization (§13) is automated end to end: the
        release pipeline builds the template from the tagged source,
        verifies it, and either publishes the initial root commit or
        opens a generated pull request. Re-running a publication for an
@@ -665,6 +682,15 @@ write and fails closed on mismatch.
 | FR-028 | An ambiguous mutation is reported as unknown, never as success | INVARIANT | internal/github | client_test.go |
 | FR-029 | Generated repositories carry a fill-in-ready `spec.md` | ENFORCED | template/spec.md, internal/template | template_test.go |
 | FR-030 | Generated repositories carry issue/PR forms, an ADR process, wiki seed, and a definition of done | ENFORCED | template/ | template_test.go |
+| FR-031 | The project model is a typed, versioned, documented schema; unknown fields and unknown versions are rejected; model output is validated, never trusted | ENFORCED | planned (see §24) | planned: schema, invalid-input, and semantic-validation tests |
+| FR-032 | Inference goes through a central provider abstraction; no model ID is hardcoded in application code; capability routing is configurable | ENFORCED | planned (see §24) | planned: routing unit tests against a mocked gateway |
+| FR-033 | Free-only inference is the default; exhaustion of eligible free routes pauses with a checkpoint, never falling back to paid inference without explicit opt-in | INVARIANT | planned (see §24) | planned: fallback, exhaustion, and resume tests against a mocked gateway |
+| FR-034 | Retries are bounded and classified; deterministic client errors are not retried indefinitely | ENFORCED | planned (see §24) | planned: retry-bound tests against a mocked gateway |
+| FR-035 | The MCP surface exposes only approved engine operations, with validated arguments and enforced filesystem boundaries | ENFORCED | planned (see §24) | planned: protocol tests and path-traversal tests |
+| FR-036 | Orchestration runs explicit stages with persistent checkpoints, human approval gates for consequential actions, and bounded repair loops | ENFORCED | planned (see §24) | planned: resume, approval, and repair-limit tests with mocked inference |
+| FR-037 | Retrieval serves source-grounded context with provenance; secrets and build artifacts are excluded; retrieved content cannot override policy | ENFORCED | planned (see §24) | planned: provenance, invalidation, and injection tests |
+| FR-038 | Inference credentials come from the environment at invocation time; secrets are redacted from logs and outbound inference context is allowlisted | INVARIANT | planned (see §24) | planned: redaction tests |
+| FR-039 | The Astro marketing-site product template builds reproducibly from the engine with the determinism and provenance guarantees of §13 | ENFORCED | planned (see §24) | planned: golden build tests |
 
 ### 22.2 Non-functional requirements
 
@@ -675,7 +701,9 @@ write and fails closed on mismatch.
 | NFR-003 | The CLI builds on the two most recent Go minors | RECOMMENDED | CI build matrix |
 | NFR-004 | Documentation has no broken internal links | ENFORCED | `validate` link check |
 | NFR-005 | No credentials, machine paths, or fabricated results in tracked files | ENFORCED | `validate` content checks |
-| NFR-006 | The product is usable without an AI assistant | INVARIANT | documentation review |
+| NFR-006 | The deterministic engine is usable without an AI assistant | INVARIANT | documentation review |
+| NFR-007 | Inference-dependent tests use mocked gateways; ordinary CI requires no network, no credentials, and no paid services | ENFORCED | mocked-gateway suites in `go test ./...` |
+| NFR-008 | Local development requires only the documented Go toolchain plus the orchestration runtime; no cloud account, cluster, or database | RECOMMENDED | documentation review |
 
 ### 22.3 Test strategy
 
@@ -687,6 +715,7 @@ write and fails closed on mismatch.
 | Integration | Live GitHub against a disposable repository | `scripts/verify full --with-integration` (opt-in) |
 | End-to-end | Full lifecycle against a disposable repository | `REPOFORGE_E2E=1` (opt-in) |
 | Template | Build, manifest, determinism, leak checks | `scripts/verify full` |
+| Provider and orchestration | Mocked-gateway unit and workflow tests; no live calls | planned mock suites |
 | Hosted CI | All of the above plus workflow and shell lint | Required checks |
 
 A requirement with no automated verification is either narrowed to
@@ -698,7 +727,9 @@ limitation.
 Every requirement above maps to at least one file in `internal/` or
 `scripts/` and at least one test in the same table. The mapping is
 maintained in this section; a requirement whose implementation is
-removed MUST be removed from this table in the same change.
+removed MUST be removed from this table in the same change. A
+requirement marked planned maps to a tracking issue until it gains an
+implementation and a test.
 
 ## 23. v0.1.0 acceptance criteria
 
@@ -712,7 +743,7 @@ A2. The engine repository's initial `main` history is exactly one
     commit containing the complete v0.1.0 baseline, and its only
     initial release is `v0.1.0`, targeting that commit.
 A3. `repoforge validate` runs offline and deterministically on the
-    engine checkout and exits 0; the branding gate (§8.8) finds no
+     engine checkout and exits 0; the branding gate (FR-022) finds no
     legacy product reference in any tracked file.
 A4. `repoforge doctor` issues only read requests, proven by test
     (FR-002); its exit codes distinguish drift (1) from an incomplete
@@ -748,8 +779,74 @@ A12. The template repository is registered as a GitHub template
      repository and its `main` and release tags are protected.
 A13. Routine future template updates are generated pull requests; the
      publication workflow has no normal path that writes directly to an
-     existing template `main` (§13.8).
+     existing template `main` (§13).
 A14. No credential, machine-specific path, fabricated result, or
      unverified claim appears in any tracked file or release artifact.
 A15. `scripts/verify fast` and `scripts/verify full` both exit 0 on
      the final tree, with missing tools reported rather than skipped.
+
+## 24. v0.2.0 platform scope (planned)
+
+Status: planned. Nothing in this section is implemented; every
+requirement marked planned maps to a tracking issue until it gains an
+implementation and a test (§22.4). Where this section appears to
+conflict with §§1–23, §§1–23 win until an amendment here is accepted.
+
+### 24.1 Direction
+
+RepoForge gains an optional agentic layer on top of the deterministic
+engine. The engine keeps every v0.1 property: offline deterministic
+validation, read-only diagnosis, idempotent convergence, and no
+silent mutation. The agentic layer — project model, provider
+abstraction, orchestration, retrieval, MCP surface, product template —
+MAY call the engine but MUST NOT weaken its invariants. Human approval
+remains required for consequential actions.
+
+### 24.2 Amended rules
+
+| Rule | Amendment for v0.2.0 | Rationale |
+| --- | --- | --- |
+| §4 language-agnostic | The engine stays language-agnostic; v0.2.0 ships one supported product template (Astro with TypeScript, FR-039) as the first vertical slice | One complete target proves the architecture; universal framework support stays deferred |
+| §4 content management | Orchestration MAY implement product-specific requirements inside a generated repository, only through approved tools and human approval gates (FR-035, FR-036) | Generation plus governed implementation is the v0.2.0 user journey; arbitrary mutation stays forbidden |
+| P10, NFR-006 | The deterministic engine is usable without an AI assistant; the optional orchestration layer requires configured inference | Preserves the v0.1 guarantee for the core while naming the new layer's dependency |
+| P11 | Orchestration dependencies beyond the Go standard library require the same ADR justification | Same bar, extended scope |
+| §4 SaaS | Unchanged: RepoForge operates no service. Inference is a client of a configured gateway, free routes only (FR-033) | No hosted-service scope creep |
+
+### 24.3 Deferred for v0.2.0 (affirmed non-goals)
+
+Full autonomous production deployment; arbitrary model-suggested shell
+execution; universal framework support; a SaaS control plane; a custom
+dashboard; a multi-agent hierarchy; mandatory Kubernetes; paid
+inference fallback; automatic purchasing; automatic PR merge or
+release publication; compliance certifications; a custom vector
+database; multiple databases or deployment providers before the first
+workflow is reliable.
+
+### 24.4 Required ADRs (identified, not written)
+
+Provider abstraction and free-only routing; orchestration language
+boundary and checkpoint store; MCP tool surface and permissions;
+local-first retrieval design; Astro product-template adoption and
+source-of-truth; generated product-output relationship between the
+two repositories.
+
+### 24.5 v0.2.0 acceptance criteria (planned)
+
+B1. Every requirement FR-031…FR-039 and NFR-007…NFR-008 maps to an
+    implementation and a test; inference tests use mocked gateways and
+    ordinary CI needs no live gateway, credentials, or paid services.
+B2. Free-only inference is the default with no automatic paid
+    fallback; exhaustion pauses with a checkpoint and resume
+    instructions (FR-032…FR-034, FR-038).
+B3. The documented MCP operations work with a compatible client;
+    arguments and filesystem boundaries are validated (FR-035).
+B4. A representative workflow runs, pauses for approval, resumes after
+    interruption without repeating completed external actions, and
+    stops at its repair bounds with an actionable report (FR-036).
+B5. Retrieval results carry source provenance; changed and deleted
+    sources are invalidated; secrets are excluded; retrieved
+    instructions cannot override policy (FR-037).
+B6. The product template builds reproducibly with provenance, and
+    published output matches the canonical source (FR-039, §13).
+B7. Documentation reflects actual behavior; limitations and deferred
+    features are listed; no claim exceeds its evidence.
