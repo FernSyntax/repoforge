@@ -6,8 +6,9 @@
 //
 // Implemented commands: validate (spec.md §12), doctor (spec.md §11), bootstrap
 // (spec.md §10), template validate/build/adopt (spec.md §13), git commit-check
-// and branch-check, and pr check. Exit codes: 0 = success, 1 = findings
-// or pending changes, 2 = invocation or configuration error.
+// and branch-check, mcp serve (spec.md §24, FR-035), and pr check. Exit codes:
+// 0 = success, 1 = findings or pending changes, 2 = invocation or
+// configuration error.
 package main
 
 import (
@@ -26,6 +27,7 @@ import (
 	"github.com/FernSyntax/repoforge/internal/doctor"
 	ghub "github.com/FernSyntax/repoforge/internal/github"
 	"github.com/FernSyntax/repoforge/internal/gitrules"
+	"github.com/FernSyntax/repoforge/internal/mcp"
 	"github.com/FernSyntax/repoforge/internal/schematools"
 	"github.com/FernSyntax/repoforge/internal/template"
 	"github.com/FernSyntax/repoforge/internal/validate"
@@ -74,6 +76,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runHook(args[1:], stdout, stderr)
 	case "issue":
 		return runIssue(args[1:], stdout, stderr)
+	case "mcp":
+		return runMCP(args[1:], os.Stdin, stdout, stderr)
 	case "schema":
 		return runSchema(args[1:], stdout, stderr)
 	case "version", "--version":
@@ -131,6 +135,37 @@ func runSchema(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// runMCP serves the MCP tool surface over stdio. serve is the only
+// subcommand; it runs until stdin closes. Writable tool paths resolve
+// inside --allowed-dir (spec.md §24, FR-035).
+func runMCP(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) == 0 || args[0] != "serve" {
+		fmt.Fprintln(stderr, "repoforge mcp: want subcommand 'serve'")
+		return 2
+	}
+	fs := flag.NewFlagSet("mcp serve", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	allowedDir := fs.String("allowed-dir", "", "directory writable tool paths resolve inside (required)")
+	templateSource := fs.String("template-source", defaultTemplateSource, "canonical template source directory")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "repoforge mcp serve: unexpected argument %q\n", fs.Arg(0))
+		return 2
+	}
+	srv, err := mcp.New(*allowedDir, *templateSource, stdin, stdout)
+	if err != nil {
+		fmt.Fprintf(stderr, "repoforge mcp serve: %v\n", err)
+		return 2
+	}
+	if err := srv.Serve(context.Background()); err != nil {
+		fmt.Fprintf(stderr, "repoforge mcp serve: %v\n", err)
+		return 2
+	}
+	return 0
+}
+
 func usage(w io.Writer) {
 	fmt.Fprint(w, `repoforge - the RepoForge CLI
 
@@ -155,6 +190,7 @@ Usage:
   repoforge hook install|verify|uninstall [--path DIR]
   repoforge issue scaffold --type bug|feature|task|security [--path DIR]
   repoforge issue check --type bug|feature|task|security --file BODY [--path DIR]
+  repoforge mcp serve --allowed-dir DIR [--template-source DIR]
   repoforge version
 
 validate checks the local repository checkout against the RepoForge
