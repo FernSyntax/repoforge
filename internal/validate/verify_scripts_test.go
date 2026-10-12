@@ -240,8 +240,16 @@ func TestCheckIssueFormsIsLoudOnDrift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(status) != 0 {
-		t.Errorf("the real forms were modified: %s", status)
+	// Untracked (`??`) and staged-added (`A `) paths are new work in the
+	// tree, not script damage: only modified, deleted, or renamed tracked
+	// files fail here.
+	for _, line := range strings.Split(string(status), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "??") ||
+			strings.HasPrefix(trimmed, "A ") {
+			continue
+		}
+		t.Errorf("the real forms were modified: %s", line)
 	}
 }
 

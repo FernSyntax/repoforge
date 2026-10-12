@@ -7,8 +7,9 @@
 // The tools wrap existing engine contracts instead of reimplementing
 // them: capabilities reports versions, project_validate loads and
 // validates a project document (internal/project), template_build
-// renders the canonical template source (internal/template), and
-// template_verify checks a built tree. Writable paths resolve inside
+// renders the canonical template source, product_build renders the
+// Astro product source (both internal/template), and template_verify
+// checks a built tree. Writable paths resolve inside
 // the server's allowed root through symlink evaluation before any
 // decision, on top of the engine's own output policy. No remote
 // transport is implemented.

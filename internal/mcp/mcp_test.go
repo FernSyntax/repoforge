@@ -14,9 +14,9 @@ import (
 // runSession feeds request lines to a server and returns its reply
 // lines decoded. The server is strictly sequential, so reply order
 // matches request order (notifications excepted).
-func runSession(t *testing.T, root, src string, lines []string) []map[string]any {
+func runSession(t *testing.T, root, src, product string, lines []string) []map[string]any {
 	t.Helper()
-	srv, err := New(root, src, strings.NewReader(strings.Join(lines, "\n")+"\n"), &bytes.Buffer{})
+	srv, err := New(root, src, product, strings.NewReader(strings.Join(lines, "\n")+"\n"), &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("server must construct: %v", err)
 	}
@@ -121,7 +121,7 @@ func templateSrc(t *testing.T) string {
 // four-tool surface.
 func TestHandshakeAndList(t *testing.T) {
 	root := tempRoot(t)
-	replies := runSession(t, root, root, []string{
+	replies := runSession(t, root, root, "", []string{
 		msg(1, "initialize", `{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"0"}}`),
 		msg(2, "tools/list", ""),
 	})
@@ -138,8 +138,8 @@ func TestHandshakeAndList(t *testing.T) {
 	}
 	list := result(t, replies[1])
 	tools, _ := list["tools"].([]any)
-	if len(tools) != 4 {
-		t.Fatalf("exactly four tools must be listed: %v", list)
+	if len(tools) != 5 {
+		t.Fatalf("exactly five tools must be listed: %v", list)
 	}
 	var names []string
 	for _, item := range tools {
@@ -149,7 +149,7 @@ func TestHandshakeAndList(t *testing.T) {
 			t.Fatalf("tool %v must carry an inputSchema", tool["name"])
 		}
 	}
-	want := []string{"capabilities", "project_validate", "template_build", "template_verify"}
+	want := []string{"capabilities", "project_validate", "template_build", "template_verify", "product_build"}
 	for i, n := range want {
 		if names[i] != n {
 			t.Fatalf("tool surface wrong: %v", names)
@@ -161,7 +161,7 @@ func TestHandshakeAndList(t *testing.T) {
 // clients can interleave them freely.
 func TestNotificationProducesNoReply(t *testing.T) {
 	root := tempRoot(t)
-	replies := runSession(t, root, root, []string{
+	replies := runSession(t, root, root, "", []string{
 		msg(1, "initialize", `{}`),
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
 		msg(2, "ping", ""),
@@ -175,7 +175,7 @@ func TestNotificationProducesNoReply(t *testing.T) {
 // versions and the approved tool names.
 func TestCapabilitiesCall(t *testing.T) {
 	root := tempRoot(t)
-	replies := runSession(t, root, root, []string{
+	replies := runSession(t, root, root, "", []string{
 		msg(1, "tools/call", `{"name":"capabilities","arguments":{}}`),
 	})
 	text, isErr := call(t, replies, 0)
@@ -190,7 +190,7 @@ func TestCapabilitiesCall(t *testing.T) {
 	if err := json.Unmarshal([]byte(text), &caps); err != nil {
 		t.Fatalf("capabilities must be JSON: %v", err)
 	}
-	if caps.Engine == "" || caps.Protocol != ProtocolVersion || len(caps.Tools) != 4 {
+	if caps.Engine == "" || caps.Protocol != ProtocolVersion || len(caps.Tools) != 5 {
 		t.Fatalf("capabilities wrong: %+v", caps)
 	}
 }
@@ -201,7 +201,7 @@ func TestProjectValidateCall(t *testing.T) {
 	root := tempRoot(t)
 	valid := `{"name":"project_validate","arguments":{"content":"schemaVersion: v1\nname: demo\npurpose: Demo.\n","format":"yaml"}}`
 	invalid := `{"name":"project_validate","arguments":{"content":"schemaVersion: v1\nname: '../x'\npurpose: Demo.\n"}}`
-	replies := runSession(t, root, root, []string{
+	replies := runSession(t, root, root, "", []string{
 		msg(1, "tools/call", valid),
 		msg(2, "tools/call", invalid),
 	})
@@ -220,7 +220,7 @@ func TestProjectValidateCall(t *testing.T) {
 func TestTemplateBuildAndVerify(t *testing.T) {
 	src := templateSrc(t)
 	root := tempRoot(t)
-	replies := runSession(t, root, src, []string{
+	replies := runSession(t, root, src, "", []string{
 		msg(1, "tools/call", `{"name":"template_build","arguments":{"outDir":"site1"}}`),
 		msg(2, "tools/call", `{"name":"template_verify","arguments":{"dir":"site1"}}`),
 		msg(3, "tools/call", `{"name":"template_build","arguments":{"outDir":"site1"}}`),
@@ -242,6 +242,49 @@ func TestTemplateBuildAndVerify(t *testing.T) {
 	}
 }
 
+// TestProductBuild proves the product tool renders the Astro source
+// under the same boundary, and reports cleanly when unconfigured.
+func TestProductBuild(t *testing.T) {
+	src := templateSrc(t)
+	product := productSrc(t)
+	root := tempRoot(t)
+	replies := runSession(t, root, src, product, []string{
+		msg(1, "tools/call", `{"name":"product_build","arguments":{"outDir":"shop","vars":{"ProjectName":"demo-site","Description":"Demo."}}}`),
+		msg(2, "tools/call", `{"name":"product_build","arguments":{"outDir":"../escape","vars":{"ProjectName":"x","Description":"y"}}}`),
+	})
+	text, isErr := call(t, replies, 0)
+	if isErr || !strings.Contains(text, `"ok":true`) {
+		t.Fatalf("product build must succeed: %s isErr=%v", text, isErr)
+	}
+	if _, err := os.Stat(filepath.Join(root, "shop", "package.json")); err != nil {
+		t.Fatalf("product build must write the site: %v", err)
+	}
+	if code := errCode(t, replies[1]); code != codeInvalidParams {
+		t.Fatalf("product escape must be invalid params, got %d", code)
+	}
+
+	bare := runSession(t, root, src, "", []string{
+		msg(1, "tools/call", `{"name":"product_build","arguments":{"outDir":"shop2"}}`),
+	})
+	if code := errCode(t, bare[0]); code != codeInvalidParams {
+		t.Fatalf("unconfigured product_build must be invalid params, got %d", code)
+	}
+}
+
+// productSrc locates the canonical Astro product source, skipping
+// outside the checkout per repo pattern.
+func productSrc(t *testing.T) string {
+	t.Helper()
+	src, err := filepath.Abs(filepath.Join("..", "..", "product", "astro"))
+	if err != nil {
+		t.Skip("not run from the engine checkout")
+	}
+	if info, err := os.Stat(src); err != nil || !info.IsDir() {
+		t.Skip("not run from the engine checkout")
+	}
+	return src
+}
+
 // TestPathEscapesRefused proves traversal, absolute paths, and
 // symlink smuggling never reach the engine.
 func TestPathEscapesRefused(t *testing.T) {
@@ -251,7 +294,7 @@ func TestPathEscapesRefused(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
 		t.Skip("symlinks unavailable")
 	}
-	replies := runSession(t, root, src, []string{
+	replies := runSession(t, root, src, "", []string{
 		msg(1, "tools/call", `{"name":"template_build","arguments":{"outDir":"../escape"}}`),
 		msg(2, "tools/call", `{"name":"template_build","arguments":{"outDir":"/tmp/escape"}}`),
 		msg(3, "tools/call", `{"name":"template_build","arguments":{"outDir":"link/escape"}}`),
@@ -271,7 +314,7 @@ func TestPathEscapesRefused(t *testing.T) {
 // arguments get precise codes.
 func TestProtocolErrors(t *testing.T) {
 	root := tempRoot(t)
-	replies := runSession(t, root, root, []string{
+	replies := runSession(t, root, root, "", []string{
 		msg(1, "resources/list", ""),
 		msg(2, "tools/call", `{"name":"nope","arguments":{}}`),
 		msg(3, "tools/call", `{"name":"project_validate","arguments":{}}`),
@@ -291,7 +334,7 @@ func TestProtocolErrors(t *testing.T) {
 // error with null id while the session continues.
 func TestMalformedLineKeepsSession(t *testing.T) {
 	root := tempRoot(t)
-	replies := runSession(t, root, root, []string{
+	replies := runSession(t, root, root, "", []string{
 		`this is not json`,
 		msg(2, "ping", ""),
 	})
@@ -331,17 +374,20 @@ func TestResolveWithin(t *testing.T) {
 // missing or non-directory bindings.
 func TestNewRejectsBadDirs(t *testing.T) {
 	root := tempRoot(t)
-	if _, err := New(filepath.Join(root, "absent"), root, nil, nil); err == nil {
+	if _, err := New(filepath.Join(root, "absent"), root, "", nil, nil); err == nil {
 		t.Fatal("missing allowed dir must fail")
 	}
 	file := filepath.Join(root, "f")
 	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := New(file, root, nil, nil); err == nil {
+	if _, err := New(file, root, "", nil, nil); err == nil {
 		t.Fatal("file allowed dir must fail")
 	}
-	if _, err := New(root, filepath.Join(root, "absent"), nil, nil); err == nil {
+	if _, err := New(root, filepath.Join(root, "absent"), "", nil, nil); err == nil {
 		t.Fatal("missing template source must fail")
+	}
+	if _, err := New(root, root, filepath.Join(root, "absent"), nil, nil); err == nil {
+		t.Fatal("missing product source must fail")
 	}
 }
