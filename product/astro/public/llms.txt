@@ -1,0 +1,19 @@
+# {{ .ProjectName }} — language-model index
+
+> {{ .Description }}
+
+This file helps answer engines and coding assistants navigate the
+site. It lists every page with a one-line description. Keep it in
+sync with `src/pages/`.
+
+## Pages
+
+- [Home](/) — {{ .ProjectName }}: {{ .Description }}
+- [Not found](/404.html) — Missing-page notice with a home link.
+
+## Content
+
+- Pages: `src/pages/` (Astro components, semantic HTML)
+- Layout and metadata: `src/layouts/Base.astro` (head tags, JSON-LD)
+- FAQ answers: `src/pages/index.astro` (replace placeholders first)
+- Styles: `src/styles/` (reset normalizer, design tokens)

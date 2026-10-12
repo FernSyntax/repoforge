@@ -1,6 +1,35 @@
 ---
 import Base from "../layouts/Base.astro";
 import { SITE_NAME, SITE_DESCRIPTION } from "../site";
+
+// FAQ entries ship as labeled placeholders: replace every question
+// and answer with real content before publishing. The JSON-LD below
+// mirrors exactly what is visible — no invented facts, no invented
+// URLs (url fields are omitted until the deployment hostname exists).
+const FAQ = [
+  {
+    question: "What does " + SITE_NAME + " do?",
+    answer: "Replace this answer with one plain-language sentence about your product.",
+  },
+  {
+    question: "Who is " + SITE_NAME + " for?",
+    answer: "Replace this answer with your ideal customer profile in one sentence.",
+  },
+  {
+    question: "How do I get started?",
+    answer: "Replace this answer with the single first step a new visitor should take.",
+  },
+];
+
+const faqJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  mainEntity: FAQ.map((item) => ({
+    "@type": "Question",
+    name: item.question,
+    acceptedAnswer: { "@type": "Answer", text: item.answer },
+  })),
+};
 ---
 
 <Base title={SITE_NAME} description={SITE_DESCRIPTION}>
@@ -8,6 +37,15 @@ import { SITE_NAME, SITE_DESCRIPTION } from "../site";
     <h1 id="hero-heading">{SITE_NAME}</h1>
     <p>{SITE_DESCRIPTION}</p>
     <a class="button" href="#contact">Get in touch</a>
+  </section>
+
+  <section aria-labelledby="brief-heading">
+    <h2 id="brief-heading">In brief</h2>
+    <p>
+      {SITE_NAME}: {SITE_DESCRIPTION} This page answers what it is,
+      who it serves, and how to start — written for readers and for
+      answer engines alike.
+    </p>
   </section>
 
   <section id="features" aria-labelledby="features-heading">
@@ -45,4 +83,19 @@ import { SITE_NAME, SITE_DESCRIPTION } from "../site";
       tracking and no third-party scripts.
     </p>
   </section>
+
+  <section id="faq" aria-labelledby="faq-heading">
+    <h2 id="faq-heading">Frequently asked questions</h2>
+    <dl>
+      {
+        FAQ.map((item) => (
+          <>
+            <dt>{item.question}</dt>
+            <dd>{item.answer}</dd>
+          </>
+        ))
+      }
+    </dl>
+  </section>
+  <script type="application/ld+json" set:html={JSON.stringify(faqJsonLd)} />
 </Base>

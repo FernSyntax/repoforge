@@ -1,0 +1,55 @@
+/* Normalizer layer. Coverage, deliberately narrow and documented:
+   - border-box sizing everywhere (predictable widths)
+   - body/h1-h4/p/ul/ol/figure/blockquote margin reset (no browser
+     default gaps driving layout)
+   - media elements (img, svg, video) scale inside their containers
+   - form controls inherit font (browsers otherwise substitute)
+   - buttons get pointer cursors only where they act (explicit opt-in
+     via the .button class in global.css)
+   - tables collapse borders (single source of truth for grid lines)
+   What this is NOT: a full modern-normalize port. Add that dependency
+   only when these rules prove insufficient — the file stays auditable
+   until then. Motion, focus, and color live in global.css. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body,
+h1,
+h2,
+h3,
+h4,
+p,
+ul,
+ol,
+figure,
+blockquote {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding: 0;
+}
+
+img,
+svg,
+video {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+input,
+button,
+textarea,
+select {
+  font: inherit;
+}
+
+table {
+  border-collapse: collapse;
+}
