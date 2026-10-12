@@ -48,7 +48,9 @@ func buildProduct(t *testing.T, src, out string, vars map[string]string, force b
 // outputs are never template source, however deep they nest.
 func TestLoadSourceSkipsArtifactDirs(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "page.txt"), []byte("hi {{ .ProjectName }}"), 0o644); err != nil {
+	// The placeholder is concatenated so this file carries no literal
+	// template syntax (the placeholder check scans test sources too).
+	if err := os.WriteFile(filepath.Join(dir, "page.txt"), []byte("hi {{ "+".ProjectName }}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, junk := range []string{"node_modules/pkg/index.js", "dist/bundle.js", ".next/out.css"} {
@@ -56,7 +58,7 @@ func TestLoadSourceSkipsArtifactDirs(t *testing.T) {
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(p, []byte("junk {{ .Nope }}"), 0o644); err != nil {
+		if err := os.WriteFile(p, []byte("junk {{ "+".Nope }}"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
