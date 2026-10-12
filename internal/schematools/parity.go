@@ -1,3 +1,7 @@
+// Copyright the repoforge contributors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Package schematools proves that each schema's canonical YAML form and
 // its derived JSON translation parse to identical documents.
 //
@@ -33,6 +37,7 @@ func DefaultPairs() []Pair {
 	return []Pair{
 		{"schemas/repoforge.schema.yaml", "schemas/repoforge.schema.json"},
 		{"schemas/github-governance.schema.yaml", "schemas/github-governance.schema.json"},
+		{"schemas/project.schema.yaml", "schemas/project.schema.json"},
 	}
 }
 

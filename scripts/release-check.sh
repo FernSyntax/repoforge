@@ -1,4 +1,8 @@
 #!/bin/sh
+# Copyright the repoforge contributors.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # release-check.sh validates a release tag against the release policy
 # (docs/development/release-process.md): strict SemVer tag shape,
 # annotated tag object, a matching CHANGELOG.md section, and a

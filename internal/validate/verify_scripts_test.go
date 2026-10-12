@@ -135,7 +135,7 @@ func TestCheckSchemaParityPassesOnTheRealTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("check-schema-parity: %v\n%s", err, out)
 	}
-	if !strings.Contains(string(out), "schema check: 2 schema pair(s) identical") {
+	if !strings.Contains(string(out), "schema check: 3 schema pair(s) identical") {
 		t.Errorf("unexpected output:\n%s", out)
 	}
 }
