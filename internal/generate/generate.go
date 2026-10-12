@@ -33,11 +33,11 @@ func RunGenerate(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer,
 	if err := os.MkdirAll(abs, 0o755); err != nil {
 		return "", fmt.Errorf("generate: creating %q: %w", abs, err)
 	}
-	if err := ensureDeps(ctx, stdin, stdout); err != nil {
+	if err := ensureDeps(ctx, abs); err != nil {
 		return "", err
 	}
 	prompter := NewTerminalPrompter(stdin, stdout)
-	driver := New(prompter, stdout, abs, outDir, routes)
+	driver := New(prompter, stdout, abs, outDir, []string{})
 	fmt.Fprintln(stdout, "RepoForge generates a marketing site from your answers.")
 	report, err := driver.Run(ctx)
 	if err != nil {
@@ -57,7 +57,7 @@ var (
 	ensureErr  error
 )
 
-func ensureDeps(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
+func ensureDeps(ctx context.Context, workdir string) error {
 	ensureOnce.Do(func() {
 		dir, err := pyruntime.Extract()
 		if err != nil {
@@ -69,15 +69,7 @@ func ensureDeps(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 			ensureErr = err
 			return
 		}
-		if err := pyruntime.Deps(python, dir); err == nil {
-			return
-		}
-		if !consent(stdin, stdout,
-			"Install the orchestration dependencies now (pinned, SHA-256 verified)? [y/N] ") {
-			ensureErr = fmt.Errorf("dependencies are not installed; re-run and answer y to install them")
-			return
-		}
-		if err := pyruntime.InstallDeps(python, dir, stdout); err != nil {
+		if err := pyruntime.EnsureDeps(context.Background(), python, dir); err != nil {
 			ensureErr = err
 			return
 		}

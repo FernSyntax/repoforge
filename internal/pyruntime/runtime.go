@@ -121,7 +121,7 @@ func exists(path string) (bool, error) {
 }
 
 // FindPython returns a supported interpreter, preferring explicit
-// REPOFFORGE_PYTHON, then python3.13 down to python3.11, then python3.
+// REPOFORGE_PYTHON, then python3.13 down to python3.11, then python3.
 func FindPython() (string, error) {
 	var candidates []string
 	if explicit := os.Getenv("REPOFORGE_PYTHON"); explicit != "" {
@@ -145,6 +145,7 @@ func FindPython() (string, error) {
 	return "", ErrNoPython
 }
 
+// supportsRuntime checks if a Python interpreter meets the minimum version.
 func supportsRuntime(path string) (bool, error) {
 	cmd := exec.Command(path, "-c",
 		"import sys; print('%d.%d' % sys.version_info[:2])")
@@ -166,6 +167,29 @@ func supportsRuntime(path string) (bool, error) {
 	return true, nil
 }
 
+// venvDir returns the virtual environment directory for a cache dir.
+func venvDir(dir string) string {
+	return filepath.Join(dir, "venv")
+}
+
+// PythonPath returns the python executable path in the venv.
+func PythonPath(dir string) string {
+	return filepath.Join(venvDir(dir), "bin", "python")
+}
+
+// ensureVenv creates the virtual environment if it doesn't exist.
+func ensureVenv(python, dir string) error {
+	venv := venvDir(dir)
+	if _, err := os.Stat(filepath.Join(venv, "bin", "python")); err == nil {
+		return nil // venv already exists
+	}
+	cmd := exec.Command(python, "-m", "venv", venv)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("pyruntime: creating venv: %w", err)
+	}
+	return nil
+}
+
 // Deps reports whether the embedded requirements are importable.
 func Deps(python, dir string) error {
 	cmd := exec.Command(python, "-c",
@@ -178,15 +202,20 @@ func Deps(python, dir string) error {
 	return nil
 }
 
-// InstallDeps installs the embedded, hash-pinned requirements into the
-// caller's environment. It is only ever called after explicit consent.
-func InstallDeps(python, dir string, out io.Writer) error {
-	fmt.Fprintln(out, "installing pinned dependencies (verified by SHA-256; one time)")
-	cmd := exec.Command(python, "-m", "pip", "install", "--require-hashes",
+// ensureDeps ensures dependencies are installed in the venv.
+func EnsureDeps(ctx context.Context, python, dir string) error {
+	venvPython := PythonPath(dir)
+	if err := ensureVenv(python, dir); err != nil {
+		return err
+	}
+	if err := Deps(venvPython, dir); err == nil {
+		return nil // deps already satisfied
+	}
+	// Try to install deps into the venv
+	cmd := exec.CommandContext(ctx, PythonPath(dir), "-m", "pip", "install", "--require-hashes",
 		"-r", filepath.Join(dir, RequirementsFile))
-	cmd.Dir = dir
-	cmd.Stdout = out
-	cmd.Stderr = out
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("installing dependencies: %w", err)
 	}

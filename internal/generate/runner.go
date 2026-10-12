@@ -36,10 +36,15 @@ func (r *pyruntimeRunner) ensure() (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	python, err := pyruntime.FindPython()
+	systemPython, err := pyruntime.FindPython()
 	if err != nil {
 		return "", "", err
 	}
-	r.python, r.dir = python, dir
-	return python, dir, nil
+	// Create venv using system python, then use venv python
+	if err := pyruntime.EnsureDeps(context.Background(), systemPython, dir); err != nil {
+		return "", "", err
+	}
+	venvPython := pyruntime.PythonPath(dir)
+	r.python, r.dir = venvPython, dir
+	return venvPython, dir, nil
 }
