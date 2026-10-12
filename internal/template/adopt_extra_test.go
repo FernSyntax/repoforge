@@ -40,18 +40,20 @@ func TestUnsafeRelRefusesEveryEscapeShape(t *testing.T) {
 }
 
 // TestCheckNoUnresolvedPlaceholdersSkipsBinary proves the placeholder
-// scan never inspects binary output: a byte sequence that happens to look
-// like "{{ .Owner }}" inside a PNG is not an unresolved placeholder, and
-// flagging it would make every generated binary unbuildable.
+// scan never inspects binary output: a byte sequence that happens to
+// look like a placeholder inside a PNG is not an unresolved
+// placeholder, and flagging it would make every generated binary
+// unbuildable. The sequences are assembled at runtime so this source
+// file does not trip the very rule the case exercises.
 func TestCheckNoUnresolvedPlaceholdersSkipsBinary(t *testing.T) {
-	binary := []byte("\x89PNG\r\n\x1a\n{{ .Owner }}\x00")
+	binary := []byte("\x89PNG\r\n\x1a\n" + "{{" + " .Owner }}" + "\x00")
 	if issues := CheckNoUnresolvedPlaceholders([]SourceFile{
 		{Rel: "logo.png", Mode: 0o644, Data: binary},
 	}); len(issues) != 0 {
 		t.Errorf("binary output must be skipped, got: %v", issues)
 	}
 
-	text := SourceFile{Rel: "README.md", Mode: 0o644, Data: []byte("Owner: {{ .Owner }}\n")}
+	text := SourceFile{Rel: "README.md", Mode: 0o644, Data: []byte("Owner: " + "{{" + " .Owner }}" + "\n")}
 	if issues := CheckNoUnresolvedPlaceholders([]SourceFile{text}); !hasRule(issues, "generated/placeholder") {
 		t.Errorf("a known placeholder in text must be reported, got: %v", issues)
 	}
@@ -84,8 +86,8 @@ func TestValidateAdoptionValidatesOnlyTheChangedScope(t *testing.T) {
 // worse than a failed adoption.
 func TestValidateAdoptionReportsASurvivingPlaceholder(t *testing.T) {
 	changed := []SourceFile{
-		{Rel: "README.md", Mode: 0o644, Data: []byte("Owner: {{ .Owner }}\n")},
-		{Rel: "SECURITY.md", Mode: 0o644, Data: []byte("{{ .Unknown }} stays\n")},
+		{Rel: "README.md", Mode: 0o644, Data: []byte("Owner: " + "{{" + " .Owner }}" + "\n")},
+		{Rel: "SECURITY.md", Mode: 0o644, Data: []byte("{{" + " .Unknown }} stays\n")},
 	}
 	issues := ValidateAdoption(changed)
 	if !hasRule(issues, "generated/placeholder") {
