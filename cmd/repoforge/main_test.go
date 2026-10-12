@@ -770,3 +770,60 @@ func TestReleaseReadyDelegatesToThePolicyScript(t *testing.T) {
 		t.Errorf("exit = 0, want non-zero (a malformed tag must fail)")
 	}
 }
+
+// TestMCPNeedsAServeSubcommand pins the dispatch contract: mcp without
+// serve is a usage error that never touches stdin.
+func TestMCPNeedsAServeSubcommand(t *testing.T) {
+	var stdout, stderr strings.Builder
+	if code := run([]string{"mcp"}, &stdout, &stderr); code != 2 {
+		t.Errorf("exit = %d, want 2 (mcp needs a subcommand)", code)
+	}
+	if code := run([]string{"mcp", "bogus"}, &stdout, &stderr); code != 2 {
+		t.Errorf("exit = %d, want 2 (mcp only serves)", code)
+	}
+}
+
+// TestMCPServeRefusesWithoutAllowedDir proves the writable root is
+// mandatory: no open-ended filesystem access by default.
+func TestMCPServeRefusesWithoutAllowedDir(t *testing.T) {
+	var stdout, stderr strings.Builder
+	if code := runMCP([]string{"serve"}, strings.NewReader(""), &stdout, &stderr); code != 2 {
+		t.Errorf("exit = %d, want 2 (allowed-dir is required)\n%s%s", code, stdout.String(), stderr.String())
+	}
+}
+
+// TestMCPServeShutsDownCleanOnEOF proves a constructed server exits 0
+// when the client goes away with no requests.
+func TestMCPServeShutsDownCleanOnEOF(t *testing.T) {
+	root := repoRoot(t)
+	dir := t.TempDir()
+	var stdout, stderr strings.Builder
+	code := runMCP([]string{"serve", "--allowed-dir", dir, "--template-source", root + "/template"},
+		strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 (clean EOF shutdown)\n%s%s", code, stdout.String(), stderr.String())
+	}
+}
+
+// TestMCPServeAnswersAFullSession proves the CLI transport end to end:
+// initialize, then a capabilities call, then EOF.
+func TestMCPServeAnswersAFullSession(t *testing.T) {
+	root := repoRoot(t)
+	dir := t.TempDir()
+	stdin := strings.NewReader(
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{}}}` + "\n" +
+			`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"capabilities","arguments":{}}}` + "\n")
+	var stdout, stderr strings.Builder
+	code := runMCP([]string{"serve", "--allowed-dir", dir, "--template-source", root + "/template"},
+		stdin, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0\n%s%s", code, stdout.String(), stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, `"protocolVersion":"2025-11-25"`) {
+		t.Errorf("handshake missing protocol version: %s", out)
+	}
+	if !strings.Contains(out, `template_build`) {
+		t.Errorf("capabilities missing tool names: %s", out)
+	}
+}
