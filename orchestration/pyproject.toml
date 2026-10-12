@@ -1,0 +1,9 @@
+[project]
+name = "repoforge-orchestration"
+version = "0.2.0"
+requires-python = ">=3.11"
+description = "LangGraph site-generation journey (tests and operations)"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: drives the real engine binary (needs REPOFFORGE_BIN)"]

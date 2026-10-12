@@ -116,6 +116,7 @@ var reviewedActions = map[string]bool{
 	"actions/dependency-review-action":  true,
 	"actions/download-artifact":         true,
 	"actions/setup-go":                  true,
+	"actions/setup-python":              true,
 	"actions/upload-artifact":           true,
 	"gitleaks/gitleaks-action":          true,
 	"goreleaser/goreleaser-action":      true,

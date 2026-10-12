@@ -29,10 +29,17 @@ the rendered contract.
 ## Customize
 
 - `src/site.ts` — site name and description.
-- `src/pages/index.astro` — hero, features, contact sections.
+- `src/pages/index.astro` — hero, answer-first summary, features, contact, FAQ (replace every placeholder answer).
 - `src/components/` — header and footer used by every page.
-- `src/styles/global.css` — design tokens; one layer, no frameworks.
-- `public/` — favicon, robots directives, and other verbatim assets.
+- `src/styles/reset.css` — documented normalizer layer; `global.css` — design tokens.
+- `public/` — favicon, robots directives, `llms.txt` answer-engine index, and other verbatim assets.
+
+## Search, answer, and generative engines
+
+- Titles, descriptions, and Open Graph/Twitter tags derive from your project values.
+- `WebSite` JSON-LD ships in the layout; `FAQPage` JSON-LD mirrors the visible FAQ exactly. Neither invents URLs: `url` fields stay out until the deployment hostname exists.
+- `public/llms.txt` lists every page for answer engines; keep it in sync with `src/pages/`.
+- Add `@astrojs/sitemap` once `site` is set in `astro.config.mjs`; the static `robots.txt` already allows crawling.
 
 ## Deploy
 
