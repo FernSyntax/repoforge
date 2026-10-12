@@ -1,8 +1,8 @@
 # v0.2.0 release readiness
 
-Recorded 2026-10-12 from `main` at `eb98828` plus the three open
-pull requests. This document is the release-readiness assessment; it
-is not an authorization to tag, publish, or release.
+Recorded 2026-10-12, updated after the #47/#49/#50 mergers. This
+document is the release-readiness assessment; it is not an
+authorization to tag, publish, or release.
 
 ## What `main` actually contains
 
@@ -19,13 +19,14 @@ ADRs 0016–0019 are accepted; 0020 remains proposed.
 
 | PR | Contents | State |
 | --- | --- | --- |
-| #47 | World-class template: SEO/AEO/GEO foundation, normalizers, JSON-LD, `llms.txt` | CI green, awaiting review |
-| #49 | LangGraph runtime (`orchestration/`), `product_build` MCP tool, Python CI, ADR-0021 | CI green, awaiting review |
-| #50 | Offline acceptance test for the composed slice | CI green, awaiting review |
+| #47 | World-class template: SEO/AEO/GEO foundation, normalizers, JSON-LD, `llms.txt` | merged |
+| #49 | LangGraph runtime (`orchestration/`), `product_build` MCP tool, Python CI, ADR-0021 | merged |
+| #50 | Offline acceptance test for the composed slice | merged |
+| #53 | ADR statuses, spec requirement rows, v0.2.0 changelog | open, CI green |
 
-Merge order: #47 first (its FAQ contract is a prerequisite of #49's
-content pass and of that PR's live proof), then #49, then #50. All
-three touch disjoint files, so no conflicts are expected.
+
+Merged 2026-10-12 in that order, as recommended. #53 completes the
+conformance the merges required and is open for review.
 
 ## Acceptance criteria evidence
 
@@ -55,20 +56,17 @@ three touch disjoint files, so no conflicts are expected.
 
 ### Not satisfied — do not create a release tag before these land
 
-1. The three open PRs are unmerged and unreviewed. A release cut from
-   `main` today would omit the LangGraph runtime and the world-class
-   template, so it would not be v0.2.0 as specified.
-2. ADR-0020 and ADR-0021 are `proposed`; the ADR process requires the
-   status flip to `accepted` at merge. Neither flip has landed.
-3. The spec rows FR-031…FR-039 and NFR-007/008 are still marked
-   `planned` (17 markers in `spec.md`). When the code lands, those
-   rows must point at implementations and tests, or the spec will be
-   claiming things that are not true.
-4. Live FreeLLMAPI verification is blocked: no gateway is configured
+1. #53 (ADR statuses, spec rows, changelog) is merged-ward but not yet
+   merged. Until it lands, `main` still reads the shipped slices as
+   `planned` and carries no v0.2.0 changelog section.
+2. Live FreeLLMAPI verification is blocked: no gateway is configured
    here. Everything inference-related is mock- or operator-verified.
-5. #26 (docs index) is open. It matters before release: `docs/` gained
-   several new surfaces (orchestration runtime, decisions, reference)
-   with no root index.
+   This is a permanent gap for this release unless an operator
+   configures a gateway and runs the live path.
+3. #26 (documentation index at `docs/README.md`) is open and belongs to
+   another workstream; it is listed here, not taken over. `docs/` grew
+   new surfaces (orchestration runtime, decisions, reference) with no
+   root index.
 
 ## External side effects performed
 
@@ -78,10 +76,14 @@ rewrite.
 
 ## Verdict
 
-**NOT READY.** The platform slices the mandate asked for exist, are
-tested, and are individually green — but three are unreviewed and
-unmerged, so the release candidate does not yet contain them. Merge
-#47, then #49, then #50; flip ADR-0020 and ADR-0021 to accepted; update
-the spec rows to point at the shipped implementations and tests; close
-#26; then re-run `repoforge release ready --tag v0.2.0`. Tagging and
-publishing remain authorized human actions.
+**BLOCKED on one review.** The slices the mandate asked for are merged,
+tested, and now traceable: spec rows point at implementations and
+tests, ADR-0020 and ADR-0021 are accepted, the v0.2.0 changelog
+section exists, and both tree-level preconditions of the release
+check pass (a build stamped `v0.2.0` reports `v0.2.0`; the changelog
+section matches). Remaining before the release candidate is complete:
+merge #53, and confirm #26 is closed by its own workstream. Then run
+`repoforge release ready --tag v0.2.0` and create the annotated tag on
+`main` — tagging and publishing remain authorized human actions.
+This document is superseded by each merge, not edited in place forever:
+read the current checklist, then act.
