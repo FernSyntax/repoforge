@@ -6,6 +6,7 @@ interface Props {
 
 import Header from "../components/Header.astro";
 import Footer from "../components/Footer.astro";
+import "../styles/reset.css";
 import "../styles/global.css";
 
 const { title, description } = Astro.props;
@@ -17,11 +18,24 @@ const { title, description } = Astro.props;
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content={description} />
+    <meta name="theme-color" content="#ffffff" />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>{title}</title>
+    <script
+      type="application/ld+json"
+      set:html={JSON.stringify({
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        name: title,
+        description: description,
+      })}
+    />
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>

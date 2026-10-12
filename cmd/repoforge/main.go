@@ -153,6 +153,7 @@ func runMCP(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	allowedDir := fs.String("allowed-dir", "", "directory writable tool paths resolve inside (required)")
 	templateSource := fs.String("template-source", defaultTemplateSource, "canonical template source directory")
+	productSource := fs.String("product-source", defaultProductSource, "Astro product template source directory (empty disables product_build)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -160,7 +161,7 @@ func runMCP(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "repoforge mcp serve: unexpected argument %q\n", fs.Arg(0))
 		return 2
 	}
-	srv, err := mcp.New(*allowedDir, *templateSource, stdin, stdout)
+	srv, err := mcp.New(*allowedDir, *templateSource, *productSource, stdin, stdout)
 	if err != nil {
 		fmt.Fprintf(stderr, "repoforge mcp serve: %v\n", err)
 		return 2
@@ -242,7 +243,7 @@ Usage:
   repoforge hook install|verify|uninstall [--path DIR]
   repoforge issue scaffold --type bug|feature|task|security [--path DIR]
   repoforge issue check --type bug|feature|task|security --file BODY [--path DIR]
-  repoforge mcp serve --allowed-dir DIR [--template-source DIR]
+  repoforge mcp serve --allowed-dir DIR [--template-source DIR] [--product-source DIR]
   repoforge astro build --out DIR [--product-source DIR] [--var key=value ...] [--force]
   repoforge version
 

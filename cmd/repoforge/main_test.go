@@ -798,7 +798,7 @@ func TestMCPServeShutsDownCleanOnEOF(t *testing.T) {
 	root := repoRoot(t)
 	dir := t.TempDir()
 	var stdout, stderr strings.Builder
-	code := runMCP([]string{"serve", "--allowed-dir", dir, "--template-source", root + "/template"},
+	code := runMCP([]string{"serve", "--allowed-dir", dir, "--template-source", root + "/template", "--product-source", root + "/product/astro"},
 		strings.NewReader(""), &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0 (clean EOF shutdown)\n%s%s", code, stdout.String(), stderr.String())
@@ -814,7 +814,7 @@ func TestMCPServeAnswersAFullSession(t *testing.T) {
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{}}}` + "\n" +
 			`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"capabilities","arguments":{}}}` + "\n")
 	var stdout, stderr strings.Builder
-	code := runMCP([]string{"serve", "--allowed-dir", dir, "--template-source", root + "/template"},
+	code := runMCP([]string{"serve", "--allowed-dir", dir, "--template-source", root + "/template", "--product-source", root + "/product/astro"},
 		stdin, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0\n%s%s", code, stdout.String(), stderr.String())

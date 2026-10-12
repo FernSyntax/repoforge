@@ -28,6 +28,7 @@ normative from the moment it merges.
 | [0018](0018-go-native-staged-orchestration.md) | Go-native staged orchestration with file checkpoints | accepted | §24, FR-036 |
 | [0019](0019-local-first-lexical-retrieval.md) | Local-first lexical retrieval, embeddings deferred | accepted | §24, FR-037 |
 | [0020](0020-astro-product-template.md) | Astro product template with engine-side deterministic build | proposed | §24, FR-039 |
+| [0021](0021-langgraph-orchestration-runtime.md) | LangGraph orchestration runtime alongside the Go runner | proposed | §24, FR-036 |
 
 `spec.md` in each link is the root specification.
 

@@ -59,11 +59,12 @@ type Server struct {
 	out   io.Writer
 }
 
-// New binds the server to its directories. allowedDir must exist and
-// templateSource must hold a valid template source; both resolve to
-// absolute symlink-free paths so later containment checks compare
-// canonical locations.
-func New(allowedDir, templateSource string, in io.Reader, out io.Writer) (*Server, error) {
+// New binds the server to its directories. allowedDir must exist,
+// templateSource must hold a valid template source, and productSource
+// must hold a valid product source (empty disables product_build);
+// all resolve to absolute symlink-free paths so later containment
+// checks compare canonical locations.
+func New(allowedDir, templateSource, productSource string, in io.Reader, out io.Writer) (*Server, error) {
 	root, err := resolveDir(allowedDir, "allowed-dir")
 	if err != nil {
 		return nil, err
@@ -72,7 +73,14 @@ func New(allowedDir, templateSource string, in io.Reader, out io.Writer) (*Serve
 	if err != nil {
 		return nil, err
 	}
-	return &Server{tools: newRegistry(root, src), in: in, out: out}, nil
+	var product string
+	if productSource != "" {
+		product, err = resolveDir(productSource, "product-source")
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &Server{tools: newRegistry(root, src, product), in: in, out: out}, nil
 }
 
 // Serve runs the line-delimited JSON-RPC loop until stdin closes or
