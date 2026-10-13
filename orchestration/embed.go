@@ -11,7 +11,7 @@ package orchestration
 
 import "embed"
 
-//go:embed brief.py graph.py llm.py mcp_client.py run.py state.py requirements.txt
+//go:embed agents.py brief.py graph.py llm.py mcp_client.py run.py state.py stitch.py requirements.txt
 var Sources embed.FS
 
 // MainModule is the journey entry point inside Sources.

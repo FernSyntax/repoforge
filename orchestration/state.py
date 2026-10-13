@@ -22,6 +22,8 @@ class RunState(TypedDict, total=False):
     brief: dict
     spec: str
     spec_digest: str
+    spec_critique: str
+    design: dict
     project_doc: dict
     out_dir: str
     vars: dict
@@ -32,6 +34,8 @@ class RunState(TypedDict, total=False):
     content_done: bool
     generated: bool
     verified: bool
+    agent_reports: dict
+    warnings: list
     errors: list
     report: str
     done: bool

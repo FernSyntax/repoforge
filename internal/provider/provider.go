@@ -54,6 +54,13 @@ const (
 	TaskCodeReview           Task = "code-review"
 	TaskSecurityReview       Task = "security-review"
 	TaskDocumentation        Task = "documentation"
+	// Review-mesh tasks for the LangGraph agent mesh (additive;
+	// unlisted tasks resolve to DefaultRoute like all others).
+	TaskDesign        Task = "design"
+	TaskAccessibility Task = "accessibility"
+	TaskSEO           Task = "seo"
+	TaskPerformance   Task = "performance"
+	TaskI18n          Task = "i18n"
 )
 
 // Message is one turn of a completion request.
