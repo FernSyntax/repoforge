@@ -34,6 +34,7 @@ class Deps:
     the gateway caller and the MCP factory."""
     llm: object = None  # (task: str, messages: list) -> str
     mcp_factory: object = None  # () -> mcp_client.Client (context-managed by caller)
+    stitch_factory: object = None  # () -> stitch.Client; None skips design
     allowed_root: str = ""
     site_rel: str = "site"
     max_content_attempts: int = MAX_CONTENT_ATTEMPTS
@@ -63,6 +64,98 @@ def _report(state: RunState, failure: str = "") -> dict:
     else:
         lines += ["remaining: none", "action required: deploy dist/ from the generated site"]
     return {"report": "\n".join(lines)}
+
+
+def _resource_name(envelope, kind: str) -> str:
+    """First plausible resource identifier in a tool result, navigating
+    defensively: Stitch nests resources differently per tool."""
+    if not isinstance(envelope, dict):
+        return ""
+    for key in ("name", kind, "project", "screen", "asset"):
+        value = envelope.get(key)
+        if isinstance(value, str) and value:
+            return value
+        if isinstance(value, dict) and isinstance(value.get("name"), str):
+            return value["name"]
+    return ""
+
+
+def _screenshot_urls(detail) -> list:
+    try:
+        from stitch import screenshot_urls as shots
+        return shots(detail) if isinstance(detail, dict) else []
+    except Exception:
+        return []
+
+
+def _design_tokens(detail) -> dict:
+    """First token-like mapping in a screen asset, flattened one level
+    so nested color groups stay usable."""
+    if not isinstance(detail, dict):
+        return {}
+    for key in ("designSystem", "design_system", "tokens", "theme"):
+        value = detail.get(key)
+        if not isinstance(value, dict) or not value:
+            continue
+        flat = {}
+        for sub_key, sub_value in list(value.items())[:8]:
+            if isinstance(sub_value, (str, int, float)):
+                flat[sub_key] = sub_value
+            elif isinstance(sub_value, dict):
+                for leaf_key, leaf in list(sub_value.items())[:4]:
+                    if isinstance(leaf, (str, int, float)):
+                        flat[f"{sub_key}.{leaf_key}"] = leaf
+        return dict(list(flat.items())[:16])
+    return {}
+
+
+def design_stage(deps, state: RunState) -> dict:
+    """One bounded Stitch pass: a project, one desktop screen, and its
+    tokens plus screenshot references. Skips (never fails) without a
+    client, on client errors, or on Stitch failures."""
+    from stitch import StitchError, design_summary, screen_prompt
+    factory = getattr(deps, "stitch_factory", None)
+    if factory is None:
+        return {"stage": "project_model",
+                "design": {"skipped": "no-stitch-client"}}
+    client = None
+    try:
+        client = factory()
+    except Exception as e:
+        return {"stage": "project_model",
+                "design": {"skipped": f"client-unavailable: {e}"}}
+    try:
+        brief = state.get("brief", {})
+        title = (f"{brief.get('project_name', 'site')}-"
+                 f"{state.get('run_id', 'run')}")
+        project = client.call_tool("create_project", {"title": title})
+        project_name = _resource_name(project, "project")
+        screen = client.call_tool("generate_screen_from_text", {
+            "prompt": screen_prompt(brief),
+            "deviceType": "DESKTOP",
+        })
+        record = {"project": project_name,
+                  "screen": _resource_name(screen, "screen")}
+        detail = {}
+        if record["screen"]:
+            try:
+                detail = client.call_tool(
+                    "get_screen", {"name": record["screen"]}) or {}
+            except StitchError:
+                detail = {}
+        record["screenshots"] = _screenshot_urls(detail)
+        record["tokens"] = _design_tokens(detail)
+        record["summary"] = design_summary(record)
+        return {"stage": "project_model", "design": record}
+    except StitchError as e:
+        return {"stage": "project_model",
+                "design": {"skipped": f"stitch-failed: {e.kind}"}}
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
 
 
 def build_graph(deps: Deps, checkpointer=None):
@@ -119,6 +212,12 @@ def build_graph(deps: Deps, checkpointer=None):
             if rounds >= deps.max_approval_rounds:
                 return _fail(state, "approval not granted within bounds")
             # Otherwise pause again with the mismatch noted.
+
+    def design(state: RunState) -> dict:
+        # Optional branch: real Stitch input when configured, a
+        # recorded skip otherwise. Design failure never fails the run;
+        # generation proceeds on the local template either way.
+        return design_stage(deps, state)
 
     def project_model(state: RunState) -> dict:
         b = state["brief"]
@@ -200,6 +299,13 @@ def build_graph(deps: Deps, checkpointer=None):
             "no placeholders, no invented statistics, no superlatives about "
             "being world-class."
         )
+        try:
+            from stitch import design_summary as _direction
+            direction = _direction(state.get("design", {}))
+        except Exception:
+            direction = ""
+        if direction:
+            prompt += f" Design direction to honor: {direction}."
         raw = deps.llm("documentation", [
             {"role": "system", "content": "You write honest marketing copy as JSON."},
             {"role": "user", "content": prompt},
@@ -274,6 +380,7 @@ def build_graph(deps: Deps, checkpointer=None):
     graph.add_node("intake", intake)
     graph.add_node("spec_draft", spec_draft)
     graph.add_node("approve_gate", approve_gate)
+    graph.add_node("design", design)
     graph.add_node("project_model", project_model)
     graph.add_node("generate", generate)
     graph.add_node("content", content)
@@ -282,7 +389,8 @@ def build_graph(deps: Deps, checkpointer=None):
     graph.add_edge(START, "intake")
     graph.add_edge("intake", "spec_draft")
     graph.add_edge("spec_draft", "approve_gate")
-    graph.add_edge("approve_gate", "project_model")
+    graph.add_edge("approve_gate", "design")
+    graph.add_edge("design", "project_model")
     graph.add_edge("project_model", "generate")
     graph.add_edge("generate", "content")
     graph.add_edge("content", "verify")

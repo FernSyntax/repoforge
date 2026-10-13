@@ -46,8 +46,13 @@ def _deps(args) -> Deps:
         return MCPClient(binary, allowed, args.template_source,
                          args.product_source)
 
+    def stitch_factory():
+        from stitch import Client as StitchClient
+        return StitchClient()
+
     return Deps(llm=lambda task, messages: caller.complete(task, messages),
                 mcp_factory=factory,
+                stitch_factory=stitch_factory,
                 allowed_root=allowed,
                 site_rel=args.site_rel)
 
