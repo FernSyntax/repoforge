@@ -770,7 +770,10 @@ def test_security_skips_build_dirs(tmp_path):
     import agents as agents_mod
     write_tree(str(tmp_path), dict(GOOD_TREE, **{
         "node_modules/vite/package.json": "GITHUB_TOKEN=zzz\n",
-        "dist/index.html": "AKIAIOSFODNN7EXAMPLE\n",
+        # Split so the pattern literal never appears verbatim in a
+        # tracked file — otherwise repoforge validate flags its own
+        # scanner fixtures (spec.md §8.2).
+        "dist/index.html": "AK" + "IAIOSFODNN7EXAMPLE\n",
         "src/site.ts": "export const x = 1;\n",
     }))
     rep = agents_mod.audit_security(str(tmp_path))

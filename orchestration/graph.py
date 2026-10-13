@@ -94,6 +94,16 @@ def _report(state: RunState, failure: str = "") -> dict:
         lines += [f"failure: {failure}", "resumable: fix the cause and resume the thread"]
     else:
         lines += ["remaining: none", "action required: deploy dist/ from the generated site"]
+    visual = state.get("visual", {}) or {}
+    if visual.get("skipped"):
+        lines += [f"visual audit: skipped ({visual['skipped']})"]
+    else:
+        findings = visual.get("findings", [])
+        majors = [f for f in findings if f.get("severity") == "major"]
+        lines += [f"visual audit: {len(findings)} finding(s), "
+                  f"{len(majors)} major"]
+        for note in [f.get("note", "") for f in majors][:5]:
+            lines += [f"visual follow-up required: {note}"]
     return {"report": "\n".join(lines)}
 
 
@@ -120,6 +130,33 @@ def _unwrap(envelope):
             if isinstance(parsed, dict):
                 return parsed
     return envelope
+
+
+def _parse_findings(raw: str):
+    """Validate a model findings payload. Returns (findings, error);
+    error is empty on success."""
+    import json as _json
+    try:
+        data = _json.loads(raw)
+    except ValueError:
+        return [], "not-json"
+    if not isinstance(data, dict) or not isinstance(
+            data.get("findings"), list):
+        return [], "not-findings-shape"
+    findings = []
+    for item in data["findings"][:10]:
+        if not isinstance(item, dict):
+            return [], "finding-not-object"
+        severity = item.get("severity")
+        note = item.get("note", "")
+        area = item.get("area", "")
+        if severity not in ("info", "minor", "major"):
+            return [], f"bad-severity: {severity!r}"
+        if not isinstance(note, str) or not note.strip():
+            return [], "blank-note"
+        findings.append({"severity": severity, "area": str(area),
+                         "note": note.strip()})
+    return findings, ""
 
 
 def _resource_name(envelope, kind: str) -> str:
@@ -574,6 +611,55 @@ def static_build_stage(deps, state: RunState, site_root: str,
                        f"({type(e).__name__})")
     design["static_css"] = True
     return {"applied": applied, "skipped": skipped}
+def visual_stage(deps, state: RunState) -> dict:
+    """One bounded perceptual review: at most one screenshot, one model
+    call, validated findings. Advisory only — majors are recorded for
+    the human release decision, never block the run."""
+    from llm import GatewayError, fetch_image, image_part
+    import os as _os
+    shots = ((state.get("design", {}) or {}).get("screenshots") or [])[:1]
+    if not shots:
+        return {"stage": "verify",
+                "visual": {"skipped": "no-screenshots"}}
+    try:
+        image_b64, _mime = fetch_image(
+            shots[0], api_key=_os.environ.get("STITCH_API_KEY", ""))
+    except GatewayError as e:
+        return {"stage": "verify",
+                "visual": {"skipped": f"fetch-failed: {e.kind}"}}
+    except Exception as e:
+        return {"stage": "verify",
+                "visual": {"skipped": f"fetch-failed: {type(e).__name__}"}}
+    prompt = (
+        "Review this landing-page render for accessibility and visual "
+        "design as JSON {\"findings\": [{\"severity\": "
+        "\"info|minor|major\", \"area\": \"contrast|hierarchy|spacing|"
+        "legibility|focus\", \"note\": \"...\"}]}. "
+        "Flag low-contrast text, unclear hierarchy, cramped spacing, "
+        "and illegible sizes. No invented content; verdicts only."
+    )
+    try:
+        raw = deps.llm("design-review", [
+            {"role": "system",
+             "content": "You review renders as strict JSON."},
+            {"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                image_part(image_b64)]},
+        ])
+    except GatewayError as e:
+        return {"stage": "verify",
+                "visual": {"skipped": f"review-failed: {e.kind}"}}
+    except Exception as e:
+        return {"stage": "verify",
+                "visual": {"skipped": f"review-failed: {type(e).__name__}"}}
+    findings, error = _parse_findings(raw)
+    if error:
+        return {"stage": "verify",
+                "visual": {"skipped": f"invalid-findings: {error}"}}
+    majors = [f for f in findings if f["severity"] == "major"]
+    return {"stage": "verify",
+            "visual": {"findings": findings,
+                       "majors": [f["note"] for f in majors]}}
 
 
 def build_graph(deps: Deps, checkpointer=None):
@@ -877,7 +963,13 @@ def build_graph(deps: Deps, checkpointer=None):
         prior = list(state.get("warnings", []))
         merged = (prior + warnings)[:25]
         return {"agent_reports": reports, "warnings": merged,
-                "stage": "verify"}
+                "stage": "visual_audit"}
+
+    def visual_audit(state: RunState) -> dict:
+        # Advisory perceptual review of at most one Stitch render: majors
+        # are recorded for the human release decision, nothing here
+        # blocks the run, and every absence is a recorded skip.
+        return visual_stage(deps, state)
 
     def verify(state: RunState) -> dict:
         if state.get("failed"):
@@ -962,6 +1054,7 @@ def build_graph(deps: Deps, checkpointer=None):
     graph.add_node("content", content)
     graph.add_node("production", production)
     graph.add_node("review", review)
+    graph.add_node("visual_audit", visual_audit)
     graph.add_node("verify", verify)
     graph.add_node("report", report)
     graph.add_edge(START, "intake")
@@ -975,7 +1068,8 @@ def build_graph(deps: Deps, checkpointer=None):
     graph.add_edge("design_apply", "content")
     graph.add_edge("content", "production")
     graph.add_edge("production", "review")
-    graph.add_edge("review", "verify")
+    graph.add_edge("review", "visual_audit")
+    graph.add_edge("visual_audit", "verify")
     graph.add_conditional_edges("verify", _after_verify,
                                 {"report": "report", "content": "content"})
     graph.add_edge("report", END)
