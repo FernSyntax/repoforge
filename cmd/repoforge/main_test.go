@@ -874,3 +874,28 @@ func TestAstroBuildNeedsOutAndVars(t *testing.T) {
 		t.Errorf("failed build must not create %s", out)
 	}
 }
+
+// TestGenerateNeedsDir pins the required flag: no working directory is
+// a usage error before anything runs.
+func TestGenerateNeedsDir(t *testing.T) {
+	var stdout, stderr strings.Builder
+	if code := run([]string{"generate"}, &stdout, &stderr); code != 2 {
+		t.Errorf("exit = %d, want 2 (missing --dir)", code)
+	}
+}
+
+// TestGenerateFlagsParseAndSetupFailsClosed proves every generate
+// flag parses (anything else would exit 2) while a missing brief and
+// no dependency setup fail closed with exit 1.
+func TestGenerateFlagsParseAndSetupFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr strings.Builder
+	code := run([]string{"generate", "--dir", dir,
+		"--brief-file", filepath.Join(dir, "absent.json"),
+		"--product-source", t.TempDir(),
+		"--template-source", t.TempDir(),
+		"--yes"}, &stdout, &stderr)
+	if code == 0 || code == 2 {
+		t.Errorf("exit = %d, want 1 (unreadable brief)", code)
+	}
+}

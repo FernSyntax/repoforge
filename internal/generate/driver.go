@@ -36,6 +36,14 @@ type Driver struct {
 	Workdir  string
 	OutDir   string
 	Routes   []string
+	// ProductSource and TemplateSource thread through to the journey
+	// and the MCP server. Empty means the journey default (relative
+	// to the caller's working directory).
+	ProductSource  string
+	TemplateSource string
+	// AutoApprove pre-approves the specification gate. It is only set
+	// from an explicit --yes flag: the default stays interactive.
+	AutoApprove bool
 
 	codePaused int
 	codeFailed int
@@ -127,13 +135,26 @@ func (d *Driver) Run(ctx context.Context) (string, error) {
 func (d *Driver) passArgs() []string {
 	args := []string{"start", "--workdir", d.Workdir, "--site-rel", d.OutDir,
 		"--json", "--brief", filepath.Join(d.Workdir, "brief.json")}
-	return append(args, routeArgs(d.Routes)...)
+	return append(append(args, routeArgs(d.Routes)...), sourceArgs(d)...)
 }
 
 func (d *Driver) resumeArgs(thread, payloadFile string) []string {
 	args := []string{"resume", "--workdir", d.Workdir, "--site-rel", d.OutDir,
 		"--json", "--thread", thread, "--payload", payloadFile}
-	return append(args, routeArgs(d.Routes)...)
+	return append(append(args, routeArgs(d.Routes)...), sourceArgs(d)...)
+}
+
+// sourceArgs carries explicit template locations to the journey so a
+// run works from any directory. Empty fields keep the journey default.
+func sourceArgs(d *Driver) []string {
+	var args []string
+	if strings.TrimSpace(d.ProductSource) != "" {
+		args = append(args, "--product-source", d.ProductSource)
+	}
+	if strings.TrimSpace(d.TemplateSource) != "" {
+		args = append(args, "--template-source", d.TemplateSource)
+	}
+	return args
 }
 
 func routeArgs(routes []string) []string {
@@ -190,6 +211,10 @@ func (d *Driver) handlePause(raw json.RawMessage) (map[string]any, error) {
 		fmt.Fprintln(d.Out, strings.Repeat("─", 64))
 		fmt.Fprintln(d.Out, p.Spec)
 		fmt.Fprintln(d.Out, strings.Repeat("─", 64))
+		if d.AutoApprove {
+			fmt.Fprintln(d.Out, "Pre-approved by explicit --yes: recording approval without prompting.")
+			return map[string]any{"approved": true, "artifact": p.Artifact, "by": "cli --yes"}, nil
+		}
 		fmt.Fprintf(d.Out, "Approve this specification for digest %s? ", shortDigest(p.Artifact))
 		ok, err := d.Prompter.Confirm("yes")
 		if err != nil {
@@ -198,7 +223,7 @@ func (d *Driver) handlePause(raw json.RawMessage) (map[string]any, error) {
 		if !ok {
 			return nil, nil
 		}
-		return map[string]any{"approved": true, "artifact": p.Artifact}, nil
+		return map[string]any{"approved": true, "artifact": p.Artifact, "by": "operator"}, nil
 	}
 	return nil, fmt.Errorf("generate: unknown pause request %q", p.Action)
 }
@@ -249,4 +274,48 @@ func writeJSONN(dir, name string, v any) (string, error) {
 		return "", err
 	}
 	return path, nil
+}
+
+// RunWithAnswers drives the journey with pre-provided answers.
+func (d *Driver) RunWithAnswers(ctx context.Context, answers map[string]any) (string, error) {
+	if err := writeJSON(filepath.Join(d.Workdir, "brief.json"), answers); err != nil {
+		return "", err
+	}
+	code, out, err := d.Runner.Run(ctx, d.passArgs(), nil)
+	if err != nil && code != d.codePaused && code != d.codeFailed {
+		return "", err
+	}
+	for i := 0; i < 12; i++ {
+		ev, parseErr := parseEvent(out)
+		if parseErr != nil {
+			return "", fmt.Errorf("generate: reading journey output: %w", parseErr)
+		}
+		switch ev.Event {
+		case "done":
+			fmt.Fprintln(d.Out, ev.Report)
+			return ev.Report, nil
+		case "failed":
+			return ev.Report, fmt.Errorf("generate: %s", firstLine(ev.Report))
+		case "paused":
+			resume, herr := d.handlePause(ev.Payload)
+			if herr != nil {
+				return "", herr
+			}
+			if resume == nil {
+				return "", fmt.Errorf("generate: stopped before approval")
+			}
+			payloadFile, ferr := writeJSONN(d.Workdir, "payload.json", resume)
+			if ferr != nil {
+				return "", ferr
+			}
+			code, out, err = d.Runner.Run(ctx,
+				d.resumeArgs(ev.RunID, payloadFile), nil)
+			if err != nil && code != d.codePaused && code != d.codeFailed {
+				return "", err
+			}
+		default:
+			return "", fmt.Errorf("generate: unexpected journey event %q", ev.Event)
+		}
+	}
+	return "", fmt.Errorf("generate: journey did not settle (bound reached)")
 }

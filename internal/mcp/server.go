@@ -147,6 +147,13 @@ func (s *Server) dispatch(req request) {
 		reply(nil, &rpcError{Code: codeInvalidRequest, Message: "not a JSON-RPC 2.0 method call"})
 		return
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			if !notification {
+				_ = s.write(response{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: codeInternal, Message: fmt.Sprintf("internal error: %v", r)}})
+			}
+		}
+	}()
 	switch req.Method {
 	case "initialize":
 		reply(map[string]any{

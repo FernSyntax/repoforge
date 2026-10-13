@@ -154,6 +154,10 @@ func runGenerate(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	dir := fs.String("dir", "", "working directory for the run (required)")
 	siteRel := fs.String("out", "site", "site directory inside --dir")
+	briefFile := fs.String("brief-file", "", "JSON file with brief answers (skips interactive prompts)")
+	productSource := fs.String("product-source", "product/astro", "product template source (absolute, or relative to current directory)")
+	templateSource := fs.String("template-source", "template", "governance template source (absolute, or relative to current directory)")
+	autoApprove := fs.Bool("yes", false, "pre-approve the specification gate (same opt-in contract as bootstrap --yes)")
 	routes := routeFlags{}
 	fs.Var(&routes, "route", "task=model routing override (repeatable)")
 	if err := fs.Parse(args); err != nil {
@@ -167,7 +171,7 @@ func runGenerate(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "repoforge generate: --dir is required")
 		return 2
 	}
-	_, err := generate.RunGenerate(context.Background(), stdin, stdout, stderr, *dir, *siteRel, routes)
+	_, err := generate.RunGenerate(context.Background(), stdin, stdout, stderr, *dir, *siteRel, routes, *briefFile, *productSource, *templateSource, *autoApprove)
 	if err != nil {
 		fmt.Fprintf(stderr, "repoforge generate: %v\n", err)
 		return 1
@@ -204,6 +208,16 @@ func runMCP(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if fs.NArg() != 0 {
 		fmt.Fprintf(stderr, "repoforge mcp serve: unexpected argument %q\n", fs.Arg(0))
 		return 2
+	}
+	// Convert relative product-source path to absolute path based on current working directory
+	if strings.TrimSpace(*productSource) != "" && !filepath.IsAbs(*productSource) {
+		cwd, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintf(stderr, "repoforge mcp serve: cannot determine working directory: %v\n", err)
+			return 2
+		}
+		absProductSource := filepath.Join(cwd, *productSource)
+		productSource = &absProductSource
 	}
 	srv, err := mcp.New(*allowedDir, *templateSource, *productSource, stdin, stdout)
 	if err != nil {
@@ -288,7 +302,7 @@ Usage:
   repoforge issue scaffold --type bug|feature|task|security [--path DIR]
   repoforge issue check --type bug|feature|task|security --file BODY [--path DIR]
   repoforge mcp serve --allowed-dir DIR [--template-source DIR] [--product-source DIR]
-  repoforge generate [--dir DIR] [--route task=model ...]
+  repoforge generate --dir DIR [--out NAME] [--brief-file F] [--product-source DIR] [--template-source DIR] [--yes] [--route task=model ...]
   repoforge astro build --out DIR [--product-source DIR] [--var key=value ...] [--force]
   repoforge version
 

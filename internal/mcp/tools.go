@@ -208,7 +208,8 @@ func (r *registry) all() []tool {
 
 // call runs the named tool or reports an unknown one. Argument errors
 // are protocol errors; engine failures arrive as isError content so
-// the client can display them.
+// the client can display them. Panics propagate to the server's recovery,
+// which converts them to protocol errors instead of killing the session.
 func (r *registry) call(name string, args map[string]any) (string, bool, error) {
 	for _, t := range r.all() {
 		if t.name == name {
