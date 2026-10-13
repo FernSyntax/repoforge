@@ -175,6 +175,60 @@ def _resource_name(envelope, kind: str) -> str:
     return ""
 
 
+def _asset_urls(payload: dict) -> tuple[list[str], str]:
+    """(screenshot URLs, htmlCode URL) from any screen-shaped payload.
+
+    Stitch returns the same screen at several shapes: the generate
+    envelope nests it under outputComponents[].design.screens[], while
+    get_screen returns it directly. Both carry `screenshot` and
+    `htmlCode` objects holding a downloadUrl, and some responses nest
+    them under files/assets instead. One extractor serves both, so the
+    HTML reference is found wherever Stitch put it.
+    """
+    if not isinstance(payload, dict):
+        return [], ""
+
+    def collect(source) -> list[str]:
+        """downloadUrl values from a file reference, or from a map of
+        them (the files/assets shape)."""
+        if isinstance(source, dict):
+            if source.get("downloadUrl"):
+                return [str(source["downloadUrl"])]
+            return [str(v["downloadUrl"]) for v in source.values()
+                    if isinstance(v, dict) and v.get("downloadUrl")]
+        if isinstance(source, list):
+            out = []
+            for item in source:
+                if isinstance(item, dict) and item.get("downloadUrl"):
+                    out.append(str(item["downloadUrl"]))
+            return out
+        return []
+
+    shots = collect(payload.get("screenshot"))
+    html_refs = collect(payload.get("htmlCode"))
+    html_url = html_refs[0] if html_refs else ""
+    for key in ("files", "assets"):
+        items = payload.get(key)
+        if not items:
+            continue
+        if isinstance(items, dict):
+            items = list(items.values())
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            url = item.get("downloadUrl") or item.get("url")
+            mime = str(item.get("mimeType", ""))
+            role = str(item.get("role", "")).lower()
+            if not url:
+                continue
+            if "html" in mime or role in ("htmlcode", "html"):
+                if not html_url:
+                    html_url = url
+            elif "image" in mime or role in ("screenshot", "image"):
+                shots.append(url)
+    return shots, html_url
+
+
 def _screen_record(generate_envelope) -> dict:
     """First screen in a generate_screen_from_text envelope.
 
@@ -196,18 +250,7 @@ def _screen_record(generate_envelope) -> dict:
         record: dict = {}
         if isinstance(first.get("name"), str):
             record["screen"] = first["name"]
-        shots: list[str] = []
-        html_url = ""
-        for key in ("screenshot", "htmlCode"):
-            file_ref = first.get(key) or {}
-            url = file_ref.get("downloadUrl") if isinstance(
-                file_ref, dict) else None
-            if not url:
-                continue
-            if key == "htmlCode":
-                html_url = url
-            else:
-                shots.append(url)
+        shots, html_url = _asset_urls(first)
         if shots:
             record["shots"] = shots
         if html_url:
@@ -305,13 +348,20 @@ def design_stage(deps, state: RunState) -> dict:
                     "get_screen", {"name": record["screen"]}) or {}
             except StitchError:
                 detail = {}
+        # The HTML reference is mandatory: it is the asset the journey
+        # copies into the site. Stitch has returned it from either the
+        # generate envelope or the get_screen detail depending on
+        # response shape, so both are consulted before giving up.
+        detail_shots, detail_html = _asset_urls(_unwrap(detail)
+                                                if detail else {})
         shots = _screenshot_urls(detail)
-        for url in inline.get("shots", []):
+        for url in detail_shots + list(inline.get("shots", [])):
             if url not in shots:
                 shots.append(url)
         record["screenshots"] = shots
-        if inline.get("html_url"):
-            record["html_url"] = inline["html_url"]
+        html_url = inline.get("html_url") or detail_html
+        if html_url:
+            record["html_url"] = html_url
         if inline.get("theme"):
             record["theme"] = inline["theme"]
         tokens = dict(inline.get("tokens", {}))
@@ -342,25 +392,30 @@ def design_apply_stage(deps, state: RunState) -> dict:
     design = dict(state.get("design") or {})
     if design.get("applied"):
         return {"stage": "content"}
-    if design.get("skipped"):
-        return {"stage": "content",
-                "warnings": list(state.get("warnings", [])) + [
-                    f"design apply skipped (no design: {design['skipped']})"]}
-    html_url = design.get("html_url", "")
-    if not html_url:
-        design["apply_skipped"] = "no Stitch HTML reference recorded"
-        return {"stage": "content", "design": design,
-                "warnings": list(state.get("warnings", [])) + [
-                    "design apply skipped (no Stitch HTML reference)"]}
+    # Design application is mandatory, not advisory: a configured Stitch
+    # run that ships the bare template is a failed run, because the
+    # client asked for the Stitch design and got the default theme.
+    # Every path below therefore fails the run with an actionable
+    # report instead of quietly keeping the template.
     factory = getattr(deps, "stitch_factory", None)
     if factory is None:
-        design["apply_skipped"] = "no-stitch-client"
-        return {"stage": "content", "design": design}
+        return _fail(state, "design apply failed: Stitch is not configured "
+                            "(set STITCH_API_KEY); the site would ship the "
+                            "bare template instead of the approved design")
+    if design.get("skipped"):
+        return _fail(state, "design apply failed: design skipped ("
+                     + str(design["skipped"]) + "); fix the cause and "
+                     "resume the thread")
+    html_url = design.get("html_url", "")
+    if not html_url:
+        return _fail(state, "design apply failed: Stitch recorded no HTML "
+                            "reference for the generated screen; resume to "
+                            "retry the design stage")
     try:
         client = factory()
     except Exception as e:
-        design["apply_skipped"] = f"client-unavailable: {e}"
-        return {"stage": "content", "design": design}
+        return _fail(state, "design apply failed: client unavailable "
+                            f"({type(e).__name__})")
     try:
         try:
             raw = client.download(html_url)
@@ -370,27 +425,23 @@ def design_apply_stage(deps, state: RunState) -> dict:
             except Exception:
                 pass
     except Exception as e:
-        design["apply_skipped"] = (
-            f"download failed: {type(e).__name__}")
-        return {"stage": "content", "design": design,
-                "warnings": list(state.get("warnings", [])) + [
-                    "design apply skipped (Stitch HTML unreachable; "
-                    "template design kept)"]}
+        return _fail(state, "design apply failed: Stitch HTML unreachable "
+                            f"({type(e).__name__}); resume to retry")
     if len(raw) > (2 << 20) + 1:
-        design["apply_skipped"] = "reference HTML exceeds size bound"
-        return {"stage": "content", "design": design}
+        return _fail(state, "design apply failed: Stitch HTML exceeds the "
+                            "2MiB reference bound")
     try:
         html = raw.decode("utf-8", "replace")
     except Exception:
-        design["apply_skipped"] = "reference HTML undecodable"
-        return {"stage": "content", "design": design}
+        return _fail(state, "design apply failed: Stitch HTML is not "
+                            "decodable text")
     site_root = os.path.join(deps.allowed_root, deps.site_rel)
     try:
         outcome = agents_mod.apply_stitch_to_tree(
             site_root, html, design.get("theme"))
     except Exception as e:
-        design["apply_skipped"] = f"apply crashed: {type(e).__name__}"
-        return {"stage": "content", "design": design}
+        return _fail(state, "design apply failed: applying the Stitch "
+                            f"design crashed ({type(e).__name__})")
     try:
         faithful = agents_mod.apply_faithful_page(
             site_root, html,

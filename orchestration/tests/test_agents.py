@@ -164,6 +164,12 @@ def test_graph_records_review_and_still_passes(tmp_path):
     })
     mcp = tg.FakeMCP(str(tmp_path))
     deps = Deps(llm=llm, mcp_factory=lambda: mcp,
+                # Design application is mandatory: a journey test must
+                # supply a Stitch client, and the static build stays
+                # offline (NFR-007) via the CDN fallback.
+                stitch_factory=lambda: tg.DesignStitch(),
+                run_cmd=lambda cmd, cwd, timeout: type(
+                    "R", (), {"returncode": 1})(),
                 allowed_root=str(tmp_path), site_rel="site")
     db = os.path.join(str(tmp_path), "runs.sqlite3")
     conn = sqlite3.connect(db, check_same_thread=False)
@@ -207,6 +213,9 @@ def test_graph_blocks_on_leaked_secret(tmp_path):
         "documentation": [json.dumps({"answers": ["A.", "B.", "C."]})],
     })
     deps = Deps(llm=llm, mcp_factory=lambda: LeakyMCP(str(tmp_path)),
+                stitch_factory=lambda: tg.DesignStitch(),
+                run_cmd=lambda cmd, cwd, timeout: type(
+                    "R", (), {"returncode": 1})(),
                 allowed_root=str(tmp_path), site_rel="site")
     db = os.path.join(str(tmp_path), "runs.sqlite3")
     conn = sqlite3.connect(db, check_same_thread=False)
@@ -460,21 +469,59 @@ def test_design_apply_idempotent(tmp_path):
     assert len(stitch.downloads) == 1
 
 
-def test_design_apply_skips_without_html(tmp_path):
+def test_design_apply_is_mandatory_not_optional(tmp_path):
+    """Design application must never silently degrade to the template:
+    a configured Stitch run that cannot apply fails with an actionable,
+    resumable report instead."""
     import test_graph as tg
-    from graph import design_apply_stage
+    from graph import Deps, design_apply_stage
     global FULL_BRIEF
     FULL_BRIEF = tg.FULL_BRIEF
-    deps = design_deps(tmp_path, FakeStitchDownload())
+    import graph as graph_mod
+
+    def fresh(tmp):
+        site = os.path.join(str(tmp), "site")
+        os.makedirs(os.path.join(site, "src", "pages"),
+                    exist_ok=True)
+        with open(os.path.join(site, "src", "pages", "index.astro"),
+                  "w") as f:
+            f.write("<h1>x</h1>\n")
+        return site
+
+    # 1. No Stitch client configured at all: fails, does not fall back.
+    fresh(tmp_path)
+    no_client = graph_mod.Deps(
+        llm=lambda t, m: "ok",
+        mcp_factory=lambda: tg.FakeMCP(str(tmp_path)),
+        allowed_root=str(tmp_path), site_rel="site")
+    out = graph_mod.design_apply_stage(no_client, design_state())
+    assert out.get("failed") is True, out
+    assert out.get("done") is True
+
+    # 2. Stitch recorded a skip: fails, does not fall back.
+    with_client = graph_mod.Deps(
+        llm=lambda t, m: "ok",
+        mcp_factory=lambda: tg.FakeMCP(str(tmp_path)),
+        stitch_factory=lambda: FakeStitchDownload(),
+        run_cmd=lambda c, w, t: type("R", (),
+                                      {"returncode": 1})(),
+        allowed_root=str(tmp_path), site_rel="site")
     state = design_state()
     state["design"] = {"skipped": "no-stitch-client"}
-    out = design_apply_stage(deps, state)
-    assert out["stage"] == "content"
-    assert "design" not in out or True
+    out = graph_mod.design_apply_stage(with_client, state)
+    assert out.get("failed") is True, out
+
+    # 3. A screen with no HTML reference: fails, does not fall back.
     state2 = design_state()
     del state2["design"]["html_url"]
-    out2 = design_apply_stage(deps, state2)
-    assert out2["design"]["apply_skipped"].startswith("no Stitch HTML")
+    out2 = graph_mod.design_apply_stage(with_client, state2)
+    assert out2.get("failed") is True, out2
+
+    # 4. The happy path still applies the design (regression guard for
+    #    the extraction bug: html_url was sourced only from the
+    #    generate envelope, so get_screen responses shipped bare).
+    ok = graph_mod.design_apply_stage(with_client, design_state())
+    assert ok["stage"] == "content" and ok["design"]["applied"]
 
 
 def test_token_merge_preserves_unthemed_vars(tmp_path):
@@ -1124,3 +1171,69 @@ def test_head_allowlist_uses_hostnames():
     evil_script = agents_mod._keep_head_tag(
         "script", {"src": "https://cdn.tailwindcss.com.evil.com/x.js"})
     assert evil_script is False
+
+
+class GetScreenOnlyStitch:
+    """Stitch whose generate envelope omits htmlCode, and only
+    get_screen carries it.
+
+    This is the live shape that produced "design apply skipped (no
+    Stitch HTML reference recorded)" — the journey shipped the bare
+    Astro template instead of the Stitch design."""
+
+    def __init__(self):
+        self.calls = []
+        self.downloads = []
+
+    def call_tool(self, name, arguments):
+        self.calls.append(name)
+        if name == "create_project":
+            return {"structuredContent": {"name": "projects/77"}}
+        if name == "generate_screen_from_text":
+            # No htmlCode, no nested screens: name only.
+            return {"structuredContent": {"name": "projects/77/screens/s9",
+                                          "title": "screen"}}
+        if name == "get_screen":
+            # The HTML reference lives here instead.
+            return {"structuredContent": {
+                "name": "projects/77/screens/s9",
+                "screenshot": {"downloadUrl": "https://x/shot.png"},
+                "htmlCode": {"downloadUrl": "https://x/page.html"},
+            }}
+        raise AssertionError(name)
+
+    def download(self, url):
+        self.downloads.append(url)
+        with open(FIXTURE_HTML, "rb") as f:
+            return f.read()
+
+    def close(self):
+        pass
+
+
+def test_design_finds_html_reference_from_get_screen(tmp_path):
+    """The HTML reference is mandatory and may arrive from either the
+    generate envelope or get_screen."""
+    import test_graph as tg
+    from graph import (Deps, Deps as _D, build_graph, design_apply_stage,
+                       design_stage)
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    global FULL_BRIEF
+    FULL_BRIEF = tg.FULL_BRIEF
+    stitch = GetScreenOnlyStitch()
+    deps = design_deps(tmp_path, stitch)
+    initial = {"run_id": "gso", "brief": dict(FULL_BRIEF),
+               "stage": "intake", "attempts": {}, "errors": []}
+    out = design_stage(deps, initial)["design"]
+    assert out["screen"] == "projects/77/screens/s9"
+    assert out["html_url"] == "https://x/page.html", out
+    assert out["screenshots"] == ["https://x/shot.png"]
+    # The journey must now be able to apply it, so html_url is present
+    # and the page is replaced with the Stitch markup.
+    state = dict(initial, design=out)
+    applied = design_apply_stage(deps, state)["design"]
+    assert applied.get("applied"), applied
+    assert any(a.startswith("faithful: index")
+               for a in applied["applied"]), applied["applied"]
+    assert stitch.downloads, "the HTML reference must be downloaded"
