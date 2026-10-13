@@ -7,6 +7,7 @@ verify, and the spec critic is recorded without blocking approval.
 
 import json
 import os
+import re
 import sqlite3
 import sys
 
@@ -30,6 +31,20 @@ def write_tree(root, files):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
             f.write(body)
+
+
+HOST_RE = re.compile("https?://[^\\s\"'>)]+")
+
+
+def hosts_in(text: str) -> set:
+    """Hostnames present in http(s) URLs.
+
+    Assertions on hostnames are precise. A substring assertion would
+    also pass for `fonts.googleapis.com.evil.com`, which is the exact
+    defect CodeQL flags as incomplete URL substring sanitization.
+    """
+    import agents
+    return {agents.url_host(m.group(0)) for m in HOST_RE.finditer(text)}
 
 
 GOOD_TREE = {
@@ -487,11 +502,11 @@ def test_sanitize_keeps_tailwind_and_fonts_drops_risks():
              '<iframe src="https://evil.example"></iframe>'
              '<a href="javascript:alert(1)" onclick="steal()">Click</a>')
     parts = agents_mod.sanitize_faithful(html)
-    assert "cdn.tailwindcss.com" in parts["head"]
+    assert "cdn.tailwindcss.com" in hosts_in(parts["head"])
     assert "tailwind-config" in parts["head"]
-    assert "fonts.googleapis.com" in parts["head"]
-    assert "evil.example" not in parts["head"]
-    assert "evil.example" not in parts["body"]
+    assert "fonts.googleapis.com" in hosts_in(parts["head"])
+    assert "evil.example" not in hosts_in(parts["head"])
+    assert "evil.example" not in hosts_in(parts["body"])
     assert "onclick" not in parts["body"]
     assert "javascript:" not in parts["body"]
     assert "<header" in parts["body"] and "<main" in parts["body"]
@@ -523,7 +538,7 @@ def test_faithful_page_replaces_index(tmp_path):
                              "index.astro")).read()
     assert page.startswith("<!DOCTYPE html>")
     assert page.count("<h1") == 1
-    assert "cdn.tailwindcss.com" in page
+    assert "cdn.tailwindcss.com" in hosts_in(page)
     assert "Replace this answer" not in page
     assert "{{" not in page
     assert "human-reviewed" in page or "human-review" in page
@@ -614,7 +629,7 @@ def test_faithful_run_skips_content_llm(tmp_path):
     assert "documentation" not in llm.calls
     page = open(os.path.join(site, "src", "pages",
                              "index.astro")).read()
-    assert "cdn.tailwindcss.com" in page
+    assert "cdn.tailwindcss.com" in hosts_in(page)
     assert "faithful: index" in values.get("report", "")
 
 
@@ -625,7 +640,7 @@ def test_faithful_marks_scripts_styles_inline():
         '<script id="tailwind-config">x = 1;</script>'
         '<style>.a { color: red; }</style>', "<h1>Hi</h1>", "", "demo")
     assert page.count("is:inline") == 3
-    assert "cdn.tailwindcss.com" in page
+    assert "cdn.tailwindcss.com" in hosts_in(page)
 
 
 def test_faithful_preserves_html_class():
@@ -677,9 +692,9 @@ def test_rewrite_head_static_and_fonts():
             '<script id="tailwind-config">tailwind.config = {};</script>'
             "<title>T</title>")
     static = agents_mod.rewrite_head_static(head)
-    assert "cdn.tailwindcss.com" not in static
+    assert "cdn.tailwindcss.com" not in hosts_in(static)
     assert "tailwind-config" not in static
-    assert "fonts.googleapis.com" in static
+    assert "fonts.googleapis.com" in hosts_in(static)
     assert agents_mod.collect_font_css_urls(head) == [
         "https://fonts.googleapis.com/css2?family=X"]
     local = agents_mod.rewrite_fonts_local(head)
@@ -1062,3 +1077,50 @@ def test_light_safety_css_targets_token_backgrounds():
     assert agents_mod.light_mode_safety_css([]) == ""
     # The rule reverses polarity in dark mode (no override there).
     assert ":not(.dark)" in css
+
+
+def test_url_host_rejects_lookalike_hosts():
+    """The allowlist must compare whole hosts. A substring test admits
+    fonts.googleapis.com.evil.com, which is the defect CodeQL reports
+    as incomplete URL substring sanitization."""
+    import agents as agents_mod
+
+    for hostile in ("https://fonts.googleapis.com.evil.com/x",
+                    "https://evil-cdn.tailwindcss.com/x",
+                    "https://evil.com/?fonts.googleapis.com",
+                    "https://evil.com#fonts.googleapis.com",
+                    "https://fonts.googleapis.com.evil.com",
+                    "not a url", "", "///evil.com", "https://[::1"):
+        host = agents_mod.url_host(hostile)
+        assert host not in agents_mod.FONT_HOSTS, host
+        assert host not in agents_mod.TAILWIND_CDN_HOSTS, host
+
+    for legit in ("https://fonts.googleapis.com/css2?family=X",
+                  "https://fonts.gstatic.com/a.woff2",
+                  "https://cdn.tailwindcss.com?plugins=forms",
+                  "HTTPS://FONTS.GOOGLEAPIS.COM/x"):
+        host = agents_mod.url_host(legit)
+        assert host in agents_mod.FONT_HOSTS or \
+            host in agents_mod.TAILWIND_CDN_HOSTS, host
+
+    # Malformed input yields no host rather than an exception.
+    for bad in ("", "   ", "not a url", "javascript:alert(1)",
+                "//evil.com/x", "https://[::1", "https://host:port/x"):
+        assert agents_mod.url_host(bad) in ("", "host"), agents_mod.url_host(bad)
+
+
+def test_head_allowlist_uses_hostnames():
+    """A hostile <link>/<script> host must not survive the head filter."""
+    import agents as agents_mod
+
+    evil_link = agents_mod._keep_head_tag(
+        "link", {"rel": "stylesheet",
+                 "href": "https://fonts.googleapis.com.evil.com/x.css"})
+    assert evil_link is False
+    real_link = agents_mod._keep_head_tag(
+        "link", {"rel": "stylesheet",
+                 "href": "https://fonts.googleapis.com/css2?family=X"})
+    assert real_link is True
+    evil_script = agents_mod._keep_head_tag(
+        "script", {"src": "https://cdn.tailwindcss.com.evil.com/x.js"})
+    assert evil_script is False

@@ -16,6 +16,100 @@ from __future__ import annotations
 import json
 import os
 import re
+import urllib.parse
+from html.parser import HTMLParser
+
+# Hosts the faithful page may reach while building, decided by exact
+# hostname. A substring test would also admit
+# `fonts.googleapis.com.evil.com`, which is the defect CodeQL reports
+# as incomplete URL substring sanitization.
+TAILWIND_CDN_HOSTS = frozenset({"cdn.tailwindcss.com"})
+FONT_HOSTS = frozenset({"fonts.googleapis.com", "fonts.gstatic.com"})
+
+
+class _PageScanner(HTMLParser):
+    """Structural reader for generated pages.
+
+    Regexes cannot classify HTML: `<SCRIPT>`, `</script >`, and quoted
+    attributes all defeat them (CodeQL's bad HTML filtering regexp).
+    One parser backs every consumer, so the CSP writer, the performance
+    auditor, and the text extractor cannot disagree about what the page
+    contains.
+    """
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.inline_scripts: list[str] = []
+        self.inline_styles: list[str] = []
+        self.external_scripts: list[str] = []
+        self.text: list[str] = []
+        self._skip_text: list[str] = []
+        self._in_script = False
+        self._in_style = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "script":
+            src = dict(attrs).get("src", "")
+            if src:
+                self.external_scripts.append(src)
+            else:
+                self._in_script = True
+                self._skip_text.append("script")
+        elif tag == "style":
+            self._in_style = True
+            self._skip_text.append("style")
+
+    def handle_startendtag(self, tag, attrs):
+        return
+
+    def handle_endtag(self, tag):
+        if tag == "script" and self._in_script:
+            self._in_script = False
+            if self._skip_text and self._skip_text[-1] == "script":
+                self._skip_text.pop()
+        elif tag == "style" and self._in_style:
+            self._in_style = False
+            if self._skip_text and self._skip_text[-1] == "style":
+                self._skip_text.pop()
+
+    def handle_data(self, data):
+        if self._in_script:
+            self.inline_scripts.append(data)
+        elif self._in_style:
+            self.inline_styles.append(data)
+        else:
+            self.text.append(data)
+
+
+def scan_page(page: str) -> _PageScanner:
+    """Parse a page, tolerating malformed markup (never raises)."""
+    scanner = _PageScanner()
+    try:
+        scanner.feed(page[:1 << 20])
+    except Exception:
+        pass
+    return scanner
+
+
+def page_text(page: str) -> str:
+    """Visible text of a page: scripts and styles excluded."""
+    return re.sub(r"\s+", " ", " ".join(scan_page(page).text)).strip()
+
+
+def url_host(value: str) -> str:
+    """Exact hostname of an http(s) URL, lowercased.
+
+    Returns "" for anything else, so callers compare whole hosts rather
+    than substrings.
+    """
+    try:
+        parsed = urllib.parse.urlparse((value or "").strip())
+    except ValueError:
+        return ""
+    if parsed.scheme not in ("http", "https"):
+        return ""
+    host = (parsed.hostname or "").lower().rstrip(".")
+    return host if host else ""
 
 # Patterns are assembled from fragments so the literals do not appear
 # in the tracked file: repoforge validate would flag this scanner's own
@@ -152,7 +246,10 @@ def audit_seo(root: str, brief: dict | None = None) -> dict:
     if "FAQPage" not in combined and "faq" not in page.lower():
         issues.append("seo: no FAQ structured data or section")
     checked += 1
-    if "https://example.com" in combined or "https://www.example.com" in combined:
+    placeholder_hosts = frozenset({"example.com", "www.example.com"})
+    shipped = [url_host(m.group(0)) for m in
+               re.finditer(r"https?://[^\s\"'>)]+", combined)]
+    if any(h in placeholder_hosts for h in shipped):
         issues.append("seo: placeholder absolute URL shipped")
     checked += 1
     if brief and isinstance(brief, dict):
@@ -216,9 +313,7 @@ def audit_performance(root: str) -> dict:
         return {"ok": False, "issues": ["perf: generated index unreadable"],
                 "checked": checked}
     checked += 1
-    scripts = re.findall(r"<script[^>]*>", page)
-    external = [s for s in scripts
-                if "src=" in s and "application/ld+json" not in s]
+    external = scan_page(page).external_scripts
     if external:
         issues.append(f"perf: {len(external)} external script(s); prefer islands")
     checked += 1
@@ -651,8 +746,6 @@ def apply_stitch_to_tree(site_root: str, html: str,
 #   records an explicit human-review warning in the report; body copy is
 #   never silently presented as verified.
 
-_TAILWIND_CDN = "cdn.tailwindcss.com"
-
 _ALLOWED_HEAD = {"meta", "title", "link", "style", "script", "base"}
 _DROP_BODY = {"script", "iframe", "object", "embed", "form"}
 
@@ -660,17 +753,15 @@ _DROP_BODY = {"script", "iframe", "object", "embed", "form"}
 def _keep_head_tag(tag: str, attrs: dict) -> bool:
     if tag == "script":
         src = attrs.get("src", "")
-        if _TAILWIND_CDN in src:
-            return True
-        return attrs.get("id") == "tailwind-config" and not src
+        if src:
+            return url_host(src) in TAILWIND_CDN_HOSTS
+        return attrs.get("id") == "tailwind-config"
     if tag == "link":
         rel = attrs.get("rel", "")
         href = attrs.get("href", "")
-        if rel in ("preconnect", "dns-prefetch") or \
-                "fonts.googleapis.com" in href or \
-                "fonts.gstatic.com" in href:
+        if rel in ("preconnect", "dns-prefetch"):
             return True
-        return False
+        return bool(href) and url_host(href) in FONT_HOSTS
     return tag in _ALLOWED_HEAD
 
 
@@ -1037,7 +1128,8 @@ def finalize_static_page(site_root: str) -> dict:
         return {"applied": [], "skipped": ["static: index unreadable"]}
     if "../styles/stitch.css" in page:
         return {"applied": [], "skipped": ["static: already wired"]}
-    if "cdn.tailwindcss.com" not in page:
+    if not any(url_host(s) in TAILWIND_CDN_HOSTS
+              for s in scan_page(page).external_scripts):
         return {"applied": [], "skipped": ["static: no CDN loader found"]}
     head_match = re.search(r"(<head[^>]*>)(.*)(</head>)", page,
                            re.S | re.I)
@@ -1631,15 +1723,7 @@ def csp_for_page(page: str) -> str:
     import base64
     import hashlib
 
-    def hashes(pattern: str) -> str:
-        out = []
-        for body in re.findall(pattern, page, re.S | re.I):
-            if body.strip():
-                digest = hashlib.sha256(body.encode()).digest()
-                out.append("'sha256-" +
-                           base64.b64encode(digest).decode() + "'")
-        return " ".join(out)
-
+    scanner = scan_page(page)
     directives = ["default-src 'self'",
                   "base-uri 'self'",
                   "frame-ancestors 'none'",
@@ -1647,10 +1731,20 @@ def csp_for_page(page: str) -> str:
                   "img-src 'self' data:",
                   "font-src 'self' data:",
                   "connect-src 'self'"]
-    script_hashes = hashes(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>")
+
+    def hashes(bodies: list[str]) -> str:
+        out = []
+        for body in bodies:
+            if body.strip():
+                digest = hashlib.sha256(body.encode()).digest()
+                out.append("'sha256-" +
+                           base64.b64encode(digest).decode() + "'")
+        return " ".join(out)
+
+    script_hashes = hashes(scanner.inline_scripts)
     directives.append("script-src 'self'" +
                       (f" {script_hashes}" if script_hashes else ""))
-    style_hashes = hashes(r"<style[^>]*>(.*?)</style>")
+    style_hashes = hashes(scanner.inline_styles)
     directives.append("style-src 'self'" +
                       (f" {style_hashes}" if style_hashes else ""))
     return "; ".join(directives)
@@ -1700,10 +1794,7 @@ FORBIDDEN_PATTERNS = (
 
 
 def _page_text(page: str) -> str:
-    text = re.sub(r"<script.*?</script>", " ", page, flags=re.S | re.I)
-    text = re.sub(r"<style.*?</style>", " ", text, flags=re.S | re.I)
-    text = re.sub(r"<[^>]+>", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
+    return page_text(page)
 
 
 def icp_filter_report(page: str, brief: dict | None = None) -> dict:
