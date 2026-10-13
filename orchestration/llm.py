@@ -19,6 +19,7 @@ ENV_BASE_URL = "FREELLMAPI_BASE_URL"
 DEFAULT_BASE_URL = "http://localhost:3001/v1"
 DEFAULT_ROUTE = "auto"
 DEFAULT_TIMEOUT = 60
+MAX_IMAGE_BYTES = 4 << 20
 
 
 class GatewayError(Exception):
@@ -110,3 +111,36 @@ def _message(raw: str, status: int) -> str:
         if isinstance(msg, str) and msg.strip():
             return msg.strip()
     return f"status {status}"
+
+
+def image_part(image_b64: str, mime: str = "image/png") -> dict:
+    """One vision content part. The gateway routes image-bearing
+    requests to vision-capable models itself."""
+    return {"type": "image_url",
+            "image_url": {"url": f"data:{mime};base64,{image_b64}"}}
+
+
+def fetch_image(url: str, api_key: str = "",
+                timeout: int = DEFAULT_TIMEOUT) -> tuple:
+    """Fetch one image URL to base64, bounded and classified. Bytes are
+    returned, never logged; failures raise GatewayError."""
+    import base64
+    headers = {}
+    if api_key:
+        headers["X-Goog-Api-Key"] = api_key
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = resp.read(MAX_IMAGE_BYTES + 1)
+    except urllib.error.HTTPError as e:
+        raise GatewayError(classify(e.code),
+                           f"fetching image: status {e.code}") from None
+    except TimeoutError as e:
+        raise GatewayError(TIMEOUT, f"fetching image timed out: {e}") from None
+    except OSError as e:
+        raise GatewayError("network", f"fetching image failed: {e}") from None
+    if len(payload) > MAX_IMAGE_BYTES:
+        raise GatewayError("invalid-request",
+                           f"image exceeds {MAX_IMAGE_BYTES} bytes")
+    mime = "image/png"
+    return base64.b64encode(payload).decode("ascii"), mime
