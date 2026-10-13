@@ -61,15 +61,27 @@ func (p *TerminalPrompter) Confirm(prompt string) (bool, error) {
 		fmt.Fprintln(p.out, "no interactive terminal; declining (nothing generated)")
 		return false, nil
 	}
+	// Discard any buffered input (e.g., from shell autocomplete) so we
+	// wait for fresh user input rather than consuming buffered content.
+	if p.reader.Buffered() > 0 {
+		p.reader.Discard(p.reader.Buffered())
+	}
 	fmt.Fprintf(p.out, "%s ", prompt)
 	line, err := p.reader.ReadString('\n')
 	if err != nil && strings.TrimSpace(line) == "" {
 		return false, nil
 	}
 	answer := strings.ToLower(strings.TrimSpace(line))
-	if answer == "yes" || answer == "y" {
+	if affirmative(answer) {
 		return true, nil
 	}
 	fmt.Fprintln(p.out, "declined; nothing generated")
 	return false, nil
+}
+
+// affirmative reports whether input approves: y, ye, or yes,
+// case-insensitive. Anything else — including "yes yes", empty, or
+// "yeah" — declines, so pasted or hurried input fails safe.
+func affirmative(answer string) bool {
+	return answer == "y" || answer == "ye" || answer == "yes"
 }

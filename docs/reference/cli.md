@@ -257,6 +257,24 @@ own output policy; `--template-source` defaults to `template/` and
 until stdin closes. There is no remote transport. Exit `0` clean
 shutdown · `2` usage, configuration, or serve error.
 
+## repoforge generate
+
+```
+repoforge generate --dir DIR [--out NAME] [--brief-file F] [--product-source DIR] [--template-source DIR] [--yes] [--route task=model ...]
+```
+
+Runs the full idea-to-site journey in one command (spec.md §24,
+FR-036; ADR-0021): asks the intake brief (or loads `--brief-file`),
+shows the drafted specification for approval, generates through the
+MCP surface, runs the model content pass, verifies, and reports.
+Template locations resolve from the flags, so the command works from
+any directory; the defaults (`product/astro`, `template/`) suit an
+engine checkout. `--yes` pre-approves the specification gate with an
+explicit, attributed record — the same opt-in contract as `bootstrap
+--yes`; the default stays interactive, and piped input declines rather
+than inventing consent. Exit `0` built · `1` run failure with report ·
+`2` usage error.
+
 ## repoforge astro build
 
 ```

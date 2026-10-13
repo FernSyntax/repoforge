@@ -15,11 +15,11 @@ import (
 )
 
 // RunGenerate is the entry point behind `repoforge generate`. It
-// collects the brief interactively, runs the embedded journey, and
-// resolves every pause by asking the operator. The final report is
-// returned so callers can print or test it.
+// collects the brief (interactively or from a JSON file), runs the
+// embedded journey, and resolves every pause by asking the operator.
+// The final report is returned so callers can print or test it.
 func RunGenerate(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer,
-	workdir, outDir string, routes []string) (string, error) {
+	workdir, outDir string, routes []string, briefFile, productSource, templateSource string, autoApprove bool) (string, error) {
 	if strings.TrimSpace(workdir) == "" {
 		return "", fmt.Errorf("generate: --dir is required")
 	}
@@ -33,13 +33,35 @@ func RunGenerate(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer,
 	if err := os.MkdirAll(abs, 0o755); err != nil {
 		return "", fmt.Errorf("generate: creating %q: %w", abs, err)
 	}
-	if err := ensureDeps(ctx, abs); err != nil {
+	if err := ensureDeps(ctx, stdin, stdout); err != nil {
 		return "", err
 	}
+
+	var answers map[string]any
+	if strings.TrimSpace(briefFile) != "" {
+		var loadErr error
+		answers, loadErr = loadBriefFromFile(briefFile)
+		if loadErr != nil {
+			return "", fmt.Errorf("generate: loading brief file: %w", loadErr)
+		}
+	} else {
+		prompter := NewTerminalPrompter(stdin, stdout)
+		asked, askErr := askBriefInteractive(prompter)
+		if askErr != nil {
+			return "", askErr
+		}
+		answers = asked
+	}
+
 	prompter := NewTerminalPrompter(stdin, stdout)
-	driver := New(prompter, stdout, abs, outDir, []string{})
-	fmt.Fprintln(stdout, "RepoForge generates a marketing site from your answers.")
-	report, err := driver.Run(ctx)
+	driver := &Driver{
+		Prompter: prompter, Runner: &pyruntimeRunner{}, Out: stdout,
+		Workdir: abs, OutDir: outDir, Routes: routes,
+		ProductSource: productSource, TemplateSource: templateSource,
+		AutoApprove: autoApprove,
+		codePaused:  CodePaused, codeFailed: CodeFailed,
+	}
+	report, err := driver.RunWithAnswers(ctx, answers)
 	if err != nil {
 		if report != "" {
 			fmt.Fprintln(stderr, report)
@@ -50,6 +72,32 @@ func RunGenerate(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer,
 	return report, nil
 }
 
+func loadBriefFromFile(path string) (map[string]any, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func askBriefInteractive(prompter *TerminalPrompter) (map[string]any, error) {
+	out := map[string]any{}
+	for _, q := range Questions {
+		answer, err := prompter.Ask(q)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(answer) != "" {
+			out[q.Key] = answer
+		}
+	}
+	return out, nil
+}
+
 // ensureDeps makes the runtime usable: extraction, interpreter, and a
 // consent-gated dependency install. It caches its work per process.
 var (
@@ -57,7 +105,7 @@ var (
 	ensureErr  error
 )
 
-func ensureDeps(ctx context.Context, workdir string) error {
+func ensureDeps(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 	ensureOnce.Do(func() {
 		dir, err := pyruntime.Extract()
 		if err != nil {
@@ -67,6 +115,14 @@ func ensureDeps(ctx context.Context, workdir string) error {
 		python, err := pyruntime.FindPython()
 		if err != nil {
 			ensureErr = err
+			return
+		}
+		if err := pyruntime.Deps(python, dir); err == nil {
+			return
+		}
+		if !consent(stdin, stdout,
+			"Install the orchestration dependencies now (pinned, SHA-256 verified)? [y/N] ") {
+			ensureErr = fmt.Errorf("dependencies are not installed; re-run and answer y to install them")
 			return
 		}
 		if err := pyruntime.EnsureDeps(context.Background(), python, dir); err != nil {

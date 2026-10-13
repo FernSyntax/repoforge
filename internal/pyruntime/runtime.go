@@ -225,12 +225,17 @@ func EnsureDeps(ctx context.Context, python, dir string) error {
 // Run executes the journey entry point. The caller owns the process's
 // stdin, stdout, and stderr, so an interactive TUI can drive it.
 func Run(ctx context.Context, python, dir string, stdin io.Reader, stdout, stderr io.Writer, args ...string) error {
-	cmd := exec.CommandContext(ctx, python, MainModule)
+	cmd := exec.CommandContext(ctx, python, "-u", MainModule)
 	cmd.Dir = dir
 	cmd.Args = append(cmd.Args, args...)
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	// Pass through REPOFFORGE_BIN so the subprocess can find the engine binary.
+	// Use unbuffered I/O to ensure Python flushes output immediately.
+	if bin := os.Getenv("REPOFFORGE_BIN"); bin != "" {
+		cmd.Env = append(os.Environ(), "REPOFFORGE_BIN="+bin, "PYTHONUNBUFFERED=1")
+	}
 	if err := cmd.Run(); err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
