@@ -117,7 +117,7 @@ func ensureDeps(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 			ensureErr = err
 			return
 		}
-		if err := pyruntime.Deps(python, dir); err == nil {
+		if err := pyruntime.Deps(pyruntime.PythonPath(dir), dir); err == nil {
 			return
 		}
 		if !consent(stdin, stdout,
