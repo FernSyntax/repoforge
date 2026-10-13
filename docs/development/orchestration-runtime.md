@@ -100,6 +100,17 @@ it out of logs, prompts, checkpoints, and the repository. The client
 sends it only as the `X-Goog-Api-Key` header to
 `https://stitch.googleapis.com/mcp` and redacts it from every error.
 
+## Visual audit (optional, advisory)
+
+After the content pass, the journey reviews at most one Stitch render
+through a vision-capable gateway route: contrast, hierarchy, spacing,
+legibility, and focus as structured JSON findings (`info`/`minor`/
+`major`). Majors are recorded as release follow-ups in the final
+report; nothing here blocks the run, and missing screenshots, fetch
+failures, model outages, or invalid output all resolve to a recorded
+skip. Bytes are fetched with the Stitch key header, capped at 4 MiB,
+and never logged. Without screenshots the stage is a no-op.
+
 ## Testing
 
 ```sh
