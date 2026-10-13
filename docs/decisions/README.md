@@ -29,6 +29,7 @@ normative from the moment it merges.
 | [0019](0019-local-first-lexical-retrieval.md) | Local-first lexical retrieval, embeddings deferred | accepted | §24, FR-037 |
 | [0020](0020-astro-product-template.md) | Astro product template with engine-side deterministic build | accepted | §24, FR-039 |
 | [0021](0021-langgraph-orchestration-runtime.md) | LangGraph orchestration runtime alongside the Go runner | accepted | §24, FR-036 |
+| [0022](0022-stitch-design-input.md) | Stitch design input over Streamable HTTP | proposed | §24, FR-035 |
 
 `spec.md` in each link is the root specification.
 

@@ -79,6 +79,27 @@ Task routes default to `auto` (the gateway router). Pin one with
 configuration. If no eligible route answers, the run stops with a
 classified `rate-limit` failure — there is no paid fallback.
 
+## Stitch design input (optional)
+
+When `STITCH_API_KEY` is set, the journey takes a bounded design
+branch after approval: one Stitch project, one desktop screen from
+the brief, plus its tokens and screenshot references, all recorded in
+run state and fed to the content pass as direction. Bounds: one
+project and one screen per run, no automatic deletion of remote
+state, failures skip the branch with a recorded reason instead of
+failing the run. Without a key the branch records `design_skipped`
+and the journey continues on the local template.
+
+```sh
+export STITCH_API_KEY="<rotated-key>"   # env only; never commit, never paste
+```
+
+Key hygiene is mandatory: a key that was ever pasted anywhere is
+compromised — rotate it in console immediately, restrict it, and keep
+it out of logs, prompts, checkpoints, and the repository. The client
+sends it only as the `X-Goog-Api-Key` header to
+`https://stitch.googleapis.com/mcp` and redacts it from every error.
+
 ## Testing
 
 ```sh
