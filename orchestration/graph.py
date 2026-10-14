@@ -310,6 +310,7 @@ def design_stage(deps, state: RunState) -> dict:
     tokens plus screenshot references. Skips (never fails) without a
     client, on client errors, or on Stitch failures."""
     from stitch import StitchError, design_summary, screen_prompt
+    import agents as agents_mod
     factory = getattr(deps, "stitch_factory", None)
     if factory is None:
         return {"stage": "project_model",
@@ -331,13 +332,21 @@ def design_stage(deps, state: RunState) -> dict:
         # "Requested entity was not found."
         project_id = (project_name.split("/", 1)[1]
                       if "/" in project_name else project_name)
+        # A composed design brief, not a field dump: the model reads
+        # the spec and asks for a real layout with a delivery
+        # contract, because a bare hero prompt makes Stitch return an
+        # image-only screen the journey cannot copy.
+        prompt = agents_mod.craft_design_prompt(
+            getattr(deps, "llm", None), state.get("brief", {}),
+            state.get("spec", ""))
         screen = client.call_tool("generate_screen_from_text", {
             "projectId": project_id,
-            "prompt": screen_prompt(brief),
+            "prompt": prompt,
             "deviceType": "DESKTOP",
         })
         record = {"project": project_name,
-                  "screen": _resource_name(screen, "screen")}
+                  "screen": _resource_name(screen, "screen"),
+                  "prompt": prompt[:400]}
         inline = _screen_record(screen)
         if inline.get("screen") and not record["screen"]:
             record["screen"] = inline["screen"]

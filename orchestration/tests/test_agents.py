@@ -1237,3 +1237,57 @@ def test_design_finds_html_reference_from_get_screen(tmp_path):
     assert any(a.startswith("faithful: index")
                for a in applied["applied"]), applied["applied"]
     assert stitch.downloads, "the HTML reference must be downloaded"
+
+
+BRIEF = {"project_name": "demo", "purpose": "Demo.",
+         "tone_of_voice": "Plain.", "primary_keywords": "demo",
+         "geographic_scope": "Everywhere.", "non_goals": "None.",
+         "ideal_customer_profile": "Ops.", "target_audience": "Ops.",
+         "success_metric": "Done."}
+
+
+def test_craft_design_prompt_uses_the_model_and_keeps_contract():
+    import agents as agents_mod
+    seen = []
+
+    def llm(task, messages):
+        seen.append((task, messages[0]["content"][:60]))
+        return ("A confident municipal-infrastructure hero with a deep "
+                "navy surface, a single accent of signal orange, and "
+                "tabular numerics throughout, laid out as a sticky bar, "
+                "a full-bleed headline, then three proof blocks. " * 3)
+
+    prompt = agents_mod.craft_design_prompt(llm, BRIEF, "# Spec\nDemo.")
+    assert seen[0][0] == "design"
+    # Direction is composed, not dumped.
+    assert "navy" in prompt
+    assert "signal orange" in prompt
+    # The delivery contract still rides along.
+    assert "responsive HTML landing page" in prompt
+    assert "Tailwind" in prompt
+    assert "Do not return an image" in prompt
+    # The spec reached the model.
+    assert any("design" in s.lower() for _, s in seen)
+
+
+def test_craft_design_prompt_falls_back_on_any_bad_output():
+    import agents as agents_mod
+
+    def bad(tag):
+        return llm_raises
+
+    def llm_raises(task, messages):
+        raise RuntimeError("gateway down")
+
+    fallback = agents_mod.craft_design_prompt(llm_raises, BRIEF, "")
+    assert "responsive HTML landing page" in fallback
+    assert "demo" in fallback
+
+    for junk in ("", "short", '{"a":1}', "<p>html</p>", "x" * 9000,
+                 "line\n" * 40):
+        out = agents_mod.craft_design_prompt(
+            lambda t, m, j=junk: j, BRIEF, "")
+        assert out == fallback, junk[:20]
+
+    # No client at all: still a usable prompt.
+    assert agents_mod.craft_design_prompt(None, BRIEF, "") == fallback

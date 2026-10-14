@@ -2179,3 +2179,75 @@ def themed_tailwind_sources(site_root: str, config_js: str,
             "contrast": {f"{m}/{s}/{t}": r for (m, s, t), r in
                          palettes["contrast"].items()},
             "written": sources["written"], "error": ""}
+
+
+# --- Design prompt (LLM-crafted) --------------------------------------------
+#
+# screen_prompt concatenates brief fields, which asked Stitch for a
+# generic hero. A real design direction has to be composed: layout,
+# palette, typography, and section order tuned to this business. The
+# LLM reads the spec for that; the fallback keeps a gateway outage
+# from stopping a run.
+DESIGN_PROMPT_SYSTEM = (
+    "You are a senior brand and product designer writing a UI "
+    "generation brief. Reply with one dense paragraph of plain prose. "
+    "No markdown, no headings, no lists, no quotes, no preamble, and "
+    "no mention that you are an AI."
+)
+
+# The screen must arrive as HTML and CSS the journey can paste into a
+# page. Without this ask Stitch sometimes returns an image-only screen
+# (screenType IMAGE, htmlCode null), which cannot be copied at all.
+DESIGN_PROMPT_TAIL = (
+    " Deliver a complete, self-contained, responsive HTML landing page "
+    "with inline CSS and Tailwind utility classes: a sticky header "
+    "with a brand and at least four navigation links, a hero with one "
+    "headline and one call to action, three or four feature or "
+    "benefit sections, a short FAQ or process section, and a footer "
+    "with secondary links. Use real text content, semantic landmarks, "
+    "and accessible markup: aria-labels, visible focus styles, and a "
+    "prefers-reduced-motion rule. Do not return an image, a "
+    "wireframe, or a placeholder."
+)
+
+DESIGN_PROMPT_MAX_CHARS = 2600
+
+
+def craft_design_prompt(llm, brief: dict, spec: str = "") -> str:
+    """One inference call that composes the Stitch design brief.
+
+    Bounded by construction: a single call, a length band that rejects
+    markdown, JSON, and near-empty output, and a deterministic
+    fallback so a gateway failure still yields a usable prompt.
+    """
+    from stitch import screen_prompt
+    fallback = screen_prompt(brief) + DESIGN_PROMPT_TAIL
+    if llm is None:
+        return fallback
+    content = (
+        "Write a UI generation brief for one landing page.\n\n"
+        f"BUSINESS:\n{json.dumps(brief, indent=2, sort_keys=True)}\n\n"
+        f"SPECIFICATION:\n{(spec or 'not yet written')[:3000]}\n\n"
+        "In one paragraph, describe the visual concept and the feeling "
+        "it should create, the layout and section order from top to "
+        "bottom, the colour direction with specific hex values for "
+        "background, surface, text, and accent, the typography pairing "
+        "with specific font names, and the photography or illustration "
+        "direction. Name the business and its actual service. Be "
+        "concrete enough for a designer who cannot ask questions. Do "
+        "not invent statistics, prices, certifications, or customer "
+        "names."
+    )
+    try:
+        out = llm("design", [
+            {"role": "system", "content": DESIGN_PROMPT_SYSTEM},
+            {"role": "user", "content": content},
+        ])
+    except Exception:
+        return fallback
+    text = (out or "").strip()
+    if not 200 <= len(text) <= 8000:
+        return fallback
+    if text.count("\n") > 6 or text.startswith(("{", "[", "<")):
+        return fallback
+    return text[:DESIGN_PROMPT_MAX_CHARS].rstrip() + DESIGN_PROMPT_TAIL
