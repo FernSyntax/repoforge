@@ -549,9 +549,9 @@ def test_sanitize_keeps_tailwind_and_fonts_drops_risks():
              '<iframe src="https://evil.example"></iframe>'
              '<a href="javascript:alert(1)" onclick="steal()">Click</a>')
     parts = agents_mod.sanitize_faithful(html)
-    assert "cdn.tailwindcss.com" in hosts_in(parts["head"])
+    assert agents_mod.TAILWIND_CDN_HOSTS & hosts_in(parts["head"])
     assert "tailwind-config" in parts["head"]
-    assert "fonts.googleapis.com" in hosts_in(parts["head"])
+    assert agents_mod.FONT_HOSTS & hosts_in(parts["head"])
     assert "evil.example" not in hosts_in(parts["head"])
     assert "evil.example" not in hosts_in(parts["body"])
     assert "onclick" not in parts["body"]
@@ -585,7 +585,7 @@ def test_faithful_page_replaces_index(tmp_path):
                              "index.astro")).read()
     assert page.startswith("<!DOCTYPE html>")
     assert page.count("<h1") == 1
-    assert "cdn.tailwindcss.com" in hosts_in(page)
+    assert agents_mod.TAILWIND_CDN_HOSTS & hosts_in(page)
     assert "Replace this answer" not in page
     assert "{{" not in page
     assert "human-reviewed" in page or "human-review" in page
@@ -676,7 +676,7 @@ def test_faithful_run_skips_content_llm(tmp_path):
     assert "documentation" not in llm.calls
     page = open(os.path.join(site, "src", "pages",
                              "index.astro")).read()
-    assert "cdn.tailwindcss.com" in hosts_in(page)
+    assert agents_mod.TAILWIND_CDN_HOSTS & hosts_in(page)
     assert "faithful: index" in values.get("report", "")
 
 
@@ -687,7 +687,7 @@ def test_faithful_marks_scripts_styles_inline():
         '<script id="tailwind-config">x = 1;</script>'
         '<style>.a { color: red; }</style>', "<h1>Hi</h1>", "", "demo")
     assert page.count("is:inline") == 3
-    assert "cdn.tailwindcss.com" in hosts_in(page)
+    assert agents_mod.TAILWIND_CDN_HOSTS & hosts_in(page)
 
 
 def test_faithful_preserves_html_class():
@@ -739,9 +739,9 @@ def test_rewrite_head_static_and_fonts():
             '<script id="tailwind-config">tailwind.config = {};</script>'
             "<title>T</title>")
     static = agents_mod.rewrite_head_static(head)
-    assert "cdn.tailwindcss.com" not in hosts_in(static)
+    assert not (agents_mod.TAILWIND_CDN_HOSTS & hosts_in(static))
     assert "tailwind-config" not in static
-    assert "fonts.googleapis.com" in hosts_in(static)
+    assert agents_mod.FONT_HOSTS & hosts_in(static)
     assert agents_mod.collect_font_css_urls(head) == [
         "https://fonts.googleapis.com/css2?family=X"]
     local = agents_mod.rewrite_fonts_local(head)
