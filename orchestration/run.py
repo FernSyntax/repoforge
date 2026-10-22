@@ -48,13 +48,18 @@ def _deps(args) -> Deps:
 
     def stitch_factory():
         from stitch import Client as StitchClient
-        return StitchClient()
+        # Screen generation takes minutes (server-side render); the
+        # bound stays tight (one project, one screen per run) while the
+        # socket waits long enough to collect the result instead of
+        # timing out into a skip.
+        return StitchClient(timeout=300)
 
     return Deps(llm=lambda task, messages: caller.complete(task, messages),
                 mcp_factory=factory,
                 stitch_factory=stitch_factory,
                 allowed_root=allowed,
-                site_rel=args.site_rel)
+                site_rel=args.site_rel,
+                domain=(args.domain or "").strip())
 
 
 def cmd_start(args) -> int:
@@ -186,6 +191,9 @@ def main(argv=None) -> int:
     common.add_argument("--product-source", default="product/astro")
     common.add_argument("--route", action="append", default=[],
                         help="task=model override, repeatable")
+    common.add_argument("--domain", default="",
+                        help="production hostname without scheme "
+                             "(canonical URLs, sitemap, social cards)")
     start = sub.add_parser("start", parents=[common])
     start.add_argument("--brief", required=True)
     start.add_argument("--run-id", default="")

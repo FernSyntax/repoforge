@@ -123,7 +123,8 @@ class Client:
 
     def call_tool(self, name: str, arguments: dict):
         """Call one tool. Protocol errors raise; tool-level failures
-        return the envelope for the caller to interpret."""
+        (an isError result envelope) raise StitchError as well, so a
+        caller never mistakes a failure payload for a resource."""
         if not self.api_key:
             raise StitchError(
                 CONFIG, f"missing Stitch credential (set {ENV_KEY})")
@@ -136,8 +137,18 @@ class Client:
             err = reply["error"]
             raise StitchError("tool-failed",
                               f"{name}: {err.get('message', err)}")
-        return (reply.get("result", {}) if isinstance(reply, dict)
-                else {})
+        result = (reply.get("result", {}) if isinstance(reply, dict)
+                  else {})
+        if isinstance(result, dict) and result.get("isError"):
+            detail = ""
+            for part in result.get("content") or []:
+                if isinstance(part, dict) and isinstance(part.get("text"),
+                                                          str):
+                    detail = part["text"].strip()
+                    break
+            detail = _redact(detail, self.api_key)[:300] or "tool reported failure"
+            raise StitchError("tool-failed", f"{name}: {detail}")
+        return result
 
     def list_tools(self) -> list:
         self._next_id += 1
@@ -147,6 +158,28 @@ class Client:
             raise StitchError("tool-failed", str(reply["error"]))
         result = reply.get("result", {}) if isinstance(reply, dict) else {}
         return result.get("tools", [])
+
+    def download(self, url: str, max_bytes: int = 2 << 20) -> bytes:
+        """Fetch a Stitch file URL (screenshot, htmlCode). Screen assets
+        require the API key, passed as a header — never embedded in the
+        URL, never logged. Bounded by max_bytes; classified failures."""
+        if not self.api_key:
+            raise StitchError(
+                CONFIG, f"missing Stitch credential (set {ENV_KEY})")
+        if not url.startswith("https://"):
+            raise StitchError("invalid-request", "refusing non-https asset URL")
+        req = urllib.request.Request(url, headers=self._headers(),
+                                     method="GET")
+        try:
+            with urllib.request.urlopen(req,
+                                        timeout=self.timeout) as resp:
+                return resp.read(max_bytes + 1)
+        except urllib.error.HTTPError as e:
+            raise self._classified(e.code, e.read(1 << 16)) from None
+        except TimeoutError as e:
+            raise StitchError(TIMEOUT, f"request timed out: {e}") from None
+        except OSError as e:
+            raise StitchError(NETWORK, f"request failed: {e}") from None
 
 
 def screen_prompt(brief: dict) -> str:

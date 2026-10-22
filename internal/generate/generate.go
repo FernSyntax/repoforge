@@ -19,7 +19,7 @@ import (
 // embedded journey, and resolves every pause by asking the operator.
 // The final report is returned so callers can print or test it.
 func RunGenerate(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer,
-	workdir, outDir string, routes []string, briefFile, productSource, templateSource string, autoApprove bool) (string, error) {
+	workdir, outDir string, routes []string, briefFile, productSource, templateSource string, autoApprove bool, domain string) (string, error) {
 	if strings.TrimSpace(workdir) == "" {
 		return "", fmt.Errorf("generate: --dir is required")
 	}
@@ -58,8 +58,8 @@ func RunGenerate(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer,
 		Prompter: prompter, Runner: &pyruntimeRunner{}, Out: stdout,
 		Workdir: abs, OutDir: outDir, Routes: routes,
 		ProductSource: productSource, TemplateSource: templateSource,
-		AutoApprove: autoApprove,
-		codePaused:  CodePaused, codeFailed: CodeFailed,
+		AutoApprove: autoApprove, Domain: strings.TrimSpace(domain),
+		codePaused: CodePaused, codeFailed: CodeFailed,
 	}
 	report, err := driver.RunWithAnswers(ctx, answers)
 	if err != nil {

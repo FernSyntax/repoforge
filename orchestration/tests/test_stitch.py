@@ -245,3 +245,48 @@ def test_design_summary_empty_on_skip():
     text = design_summary({"project": "p", "screenshots": ["a", "b"],
                            "tokens": {"c": "1"}})
     assert "p" in text and "2 reference render(s)" in text
+
+
+def test_tool_iserror_raises(monkeypatch):
+    import stitch as stitch_mod
+    body = json.dumps({"jsonrpc": "2.0", "id": 1,
+                       "result": {"isError": True, "content": [
+                           {"text": "Requested entity was not found.",
+                            "type": "text"}]}}).encode()
+    fake = FakeHTTP([body])
+    monkeypatch.setattr(stitch_mod.urllib.request, "urlopen", fake)
+    with pytest.raises(StitchError) as exc:
+        Client(api_key="k").call_tool("generate_screen_from_text", {})
+    assert exc.value.kind == "tool-failed"
+    assert "Requested entity" in str(exc.value)
+
+
+def test_design_stage_passes_project_id():
+    from graph import Deps
+    stub = StubStitch()
+    deps = Deps(stitch_factory=lambda: stub)
+    design_stage(deps, {"run_id": "r1", "brief": brief()})
+    gen = [args for name, args in stub.calls
+           if name == "generate_screen_from_text"][0]
+    assert gen.get("projectId") == "123", gen
+
+
+def test_screen_record_reads_live_shape():
+    from graph import _screen_record
+    envelope = {"structuredContent": {"outputComponents": [
+        {"design": {"screens": [{
+            "name": "projects/1/screens/abc",
+            "screenshot": {"downloadUrl": "https://x/shot.png"},
+            "htmlCode": {"downloadUrl": "https://x/page.html"},
+            "designSystem": {"designSystem": {"displayName": "Corp"}},
+            "theme": {"font": "Inter"},
+        }]}},
+    ]}}
+    rec = _screen_record(envelope)
+    assert rec["screen"] == "projects/1/screens/abc"
+    assert rec["shots"] == ["https://x/shot.png"]
+    assert rec["html_url"] == "https://x/page.html"
+    assert rec["tokens"]["designSystem.displayName"] == "Corp"
+    assert rec["tokens"]["theme.font"] == "Inter"
+    assert _screen_record({"name": "projects/1"}) == {}
+    assert _screen_record({}) == {}

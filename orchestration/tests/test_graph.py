@@ -103,9 +103,85 @@ def resume(graph, config, value):
     return graph.get_state(config).values
 
 
-def make_deps(tmp_path, llm, mcp=None):
+class DesignStitch:
+    """Stitch stand-in that records a screen with an HTML reference.
+
+    Design application is mandatory, so every journey test needs a
+    Stitch client: this one serves the recorded fixture through both
+    call shapes — the generate envelope and get_screen both carry the
+    HTML reference, so tests exercise the common case."""
+
+    def __init__(self):
+        with open(os.path.join(os.path.dirname(
+                os.path.abspath(__file__)), "fixtures",
+                "stitch-screen.html")) as f:
+            self.html = f.read()
+        self.downloads = []
+        self.calls = []
+
+    def call_tool(self, name, arguments):
+        self.calls.append(name)
+        if name == "create_project":
+            return {"structuredContent": {"name": "projects/71"}}
+        if name == "generate_screen_from_text":
+            return {"structuredContent": {"outputComponents": [
+                {"design": {"screens": [{
+                    "name": "projects/71/screens/s1",
+                    "screenshot": {"downloadUrl": "https://x/shot.png"},
+                    "htmlCode": {"downloadUrl": "https://x/page.html"},
+                    "theme": {"namedColors": {"background": "#101419"}},
+                }]}},
+            ]}}
+        if name == "get_screen":
+            return {"structuredContent": {
+                "name": "projects/71/screens/s1",
+                "screenshot": {"downloadUrl": "https://x/shot.png"},
+                "htmlCode": {"downloadUrl": "https://x/page.html"},
+            }}
+        raise AssertionError(name)
+
+    def download(self, url):
+        self.downloads.append(url)
+        return self.html.encode()
+
+    def close(self):
+        pass
+
+
+class TemplateStitch(DesignStitch):
+    """Stitch stand-in that applies a design but does not replace the
+    page.
+
+    The journey replaces the index only when the screen yields a body
+    to sanitize; this stub returns a bodyless document, so the template
+    FAQ contract stays in force. Tests that exercise the template
+    content path use it, because faithful tests cannot: the mandatory
+    design application removes the placeholder contract by design.
+    """
+
+    def call_tool(self, name, arguments):
+        if name == "generate_screen_from_text":
+            return {"structuredContent": {"outputComponents": [
+                {"design": {"screens": [{
+                    "name": "projects/71/screens/s1",
+                    "htmlCode": {"downloadUrl": "https://x/page.html"},
+                }]}},
+            ]}}
+        return super().call_tool(name, arguments)
+
+    def download(self, url):
+        return b"<!DOCTYPE html><html><head><title>t</title></head></html>"
+
+
+def make_deps(tmp_path, llm, mcp=None, stitch=None):
     mcp = mcp if mcp is not None else FakeMCP(str(tmp_path))
+    stitch = stitch if stitch is not None else DesignStitch()
     return Deps(llm=llm, mcp_factory=lambda: mcp,
+                stitch_factory=lambda: stitch,
+                # Design application is mandatory; the static build
+                # stays offline (NFR-007) via the CDN fallback.
+                run_cmd=lambda cmd, cwd, timeout: type(
+                    "R", (), {"returncode": 1})(),
                 allowed_root=str(tmp_path), site_rel="site"), mcp
 
 
@@ -138,7 +214,7 @@ def test_happy_path(tmp_path):
         "spec-drafting": ["# Spec\n\nDemo."],
         "documentation": [json.dumps({"answers": ["A one.", "A two.", "A three."]})],
     })
-    deps, mcp = make_deps(tmp_path, llm)
+    deps, mcp = make_deps(tmp_path, llm, stitch=TemplateStitch())
     graph = compiled(tmp_path, deps)
     config = {"configurable": {"thread_id": "t1"}}
     initial = {"run_id": "t1", "brief": dict(FULL_BRIEF),
@@ -164,7 +240,7 @@ def test_happy_path(tmp_path):
 def test_intake_pauses_for_missing_answers(tmp_path):
     llm = StubLLM({"spec-drafting": ["# Spec"], "documentation": [
         json.dumps({"answers": ["A.", "B.", "C."]})]})
-    deps, _ = make_deps(tmp_path, llm)
+    deps, _ = make_deps(tmp_path, llm, stitch=TemplateStitch())
     graph = compiled(tmp_path, deps)
     config = {"configurable": {"thread_id": "t2"}}
     brief = {"project_name": "demo-site"}
@@ -184,7 +260,7 @@ def test_intake_pauses_for_missing_answers(tmp_path):
 def test_approval_mismatch_repauses_within_bounds(tmp_path):
     llm = StubLLM({"spec-drafting": ["# Spec"], "documentation": [
         json.dumps({"answers": ["A.", "B.", "C."]})]})
-    deps, _ = make_deps(tmp_path, llm)
+    deps, _ = make_deps(tmp_path, llm, stitch=TemplateStitch())
     deps = Deps(llm=deps.llm, mcp_factory=deps.mcp_factory,
                 allowed_root=deps.allowed_root, site_rel=deps.site_rel,
                 max_approval_rounds=2)
@@ -214,7 +290,7 @@ def test_content_retry_then_success(tmp_path):
             json.dumps({"answers": ["A one.", "A two.", "A three."]}),
         ],
     })
-    deps, _ = make_deps(tmp_path, llm)
+    deps, _ = make_deps(tmp_path, llm, stitch=TemplateStitch())
     graph = compiled(tmp_path, deps)
     config = {"configurable": {"thread_id": "t4"}}
     initial = {"run_id": "t4", "brief": dict(FULL_BRIEF),
@@ -236,7 +312,7 @@ def test_repair_exhaustion_fails_with_report(tmp_path):
         "documentation": [json.dumps({"answers": ["A.", "B.", "C."]})],
     })
     mcp = FakeMCP(str(tmp_path), break_tree=True)
-    deps, _ = make_deps(tmp_path, llm, mcp)
+    deps, _ = make_deps(tmp_path, llm, mcp, stitch=TemplateStitch())
     graph = compiled(tmp_path, deps)
     config = {"configurable": {"thread_id": "t5"}}
     initial = {"run_id": "t5", "brief": dict(FULL_BRIEF),
@@ -257,7 +333,7 @@ def test_checkpoint_resume_generates_once(tmp_path):
         "spec-drafting": ["# Spec"],
         "documentation": [json.dumps({"answers": ["A.", "B.", "C."]})],
     })
-    deps, mcp = make_deps(tmp_path, llm)
+    deps, mcp = make_deps(tmp_path, llm, stitch=TemplateStitch())
     db = os.path.join(str(tmp_path), "runs.sqlite3")
     conn = sqlite3.connect(db, check_same_thread=False)
     graph = build_graph(deps, checkpointer=SqliteSaver(conn))
@@ -269,7 +345,7 @@ def test_checkpoint_resume_generates_once(tmp_path):
     assert mcp.calls.count("product_build") == 0
     # Fresh instance, same thread: resume approval, then finish.
     # Generation must happen exactly once, on the new instance only.
-    deps2, mcp2 = make_deps(tmp_path, llm)
+    deps2, mcp2 = make_deps(tmp_path, llm, stitch=TemplateStitch())
     conn2 = sqlite3.connect(db, check_same_thread=False)
     graph2 = build_graph(deps2, checkpointer=SqliteSaver(conn2))
     resume(graph2, config,
@@ -334,7 +410,7 @@ def test_content_fails_honestly_without_faq_contract(tmp_path):
     llm = StubLLM({"spec-drafting": ["# Spec"],
                    "documentation": [json.dumps({"answers": ["A.", "B.", "C."]})]})
     mcp = NoFaqMCP(str(tmp_path))
-    deps, _ = make_deps(tmp_path, llm, mcp)
+    deps, _ = make_deps(tmp_path, llm, mcp, stitch=TemplateStitch())
     graph = compiled(tmp_path, deps)
     config = {"configurable": {"thread_id": "t7"}}
     initial = {"run_id": "t7", "brief": dict(FULL_BRIEF),
@@ -371,7 +447,7 @@ def test_verify_never_passes_a_failed_run(tmp_path):
     llm = StubLLM({"spec-drafting": ["# Spec"],
                    "documentation": ["not json"] * 5})
     mcp = NoFaqMCP(str(tmp_path))
-    deps, _ = make_deps(tmp_path, llm, mcp)
+    deps, _ = make_deps(tmp_path, llm, mcp, stitch=TemplateStitch())
     graph = compiled(tmp_path, deps)
     config = {"configurable": {"thread_id": "t8"}}
     initial = {"run_id": "t8", "brief": dict(FULL_BRIEF),

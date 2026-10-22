@@ -44,6 +44,10 @@ type Driver struct {
 	// AutoApprove pre-approves the specification gate. It is only set
 	// from an explicit --yes flag: the default stays interactive.
 	AutoApprove bool
+	// Domain is the production hostname (no scheme) for canonical
+	// URLs, sitemap, and social cards. Empty keeps the site relative
+	// and honest: no absolute URL is ever invented.
+	Domain string
 
 	codePaused int
 	codeFailed int
@@ -135,13 +139,24 @@ func (d *Driver) Run(ctx context.Context) (string, error) {
 func (d *Driver) passArgs() []string {
 	args := []string{"start", "--workdir", d.Workdir, "--site-rel", d.OutDir,
 		"--json", "--brief", filepath.Join(d.Workdir, "brief.json")}
-	return append(append(args, routeArgs(d.Routes)...), sourceArgs(d)...)
+	return append(append(args, routeArgs(d.Routes)...), domainAndSourceArgs(d)...)
 }
 
 func (d *Driver) resumeArgs(thread, payloadFile string) []string {
 	args := []string{"resume", "--workdir", d.Workdir, "--site-rel", d.OutDir,
 		"--json", "--thread", thread, "--payload", payloadFile}
-	return append(append(args, routeArgs(d.Routes)...), sourceArgs(d)...)
+	return append(append(args, routeArgs(d.Routes)...), domainAndSourceArgs(d)...)
+}
+
+// domainAndSourceArgs carries the production domain plus explicit
+// template locations to the journey. Empty fields keep the journey
+// defaults (relative site, relative sources).
+func domainAndSourceArgs(d *Driver) []string {
+	var args []string
+	if strings.TrimSpace(d.Domain) != "" {
+		args = append(args, "--domain", strings.TrimSpace(d.Domain))
+	}
+	return append(args, sourceArgs(d)...)
 }
 
 // sourceArgs carries explicit template locations to the journey so a

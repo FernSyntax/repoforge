@@ -158,6 +158,7 @@ func runGenerate(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	productSource := fs.String("product-source", "product/astro", "product template source (absolute, or relative to current directory)")
 	templateSource := fs.String("template-source", "template", "governance template source (absolute, or relative to current directory)")
 	autoApprove := fs.Bool("yes", false, "pre-approve the specification gate (same opt-in contract as bootstrap --yes)")
+	domain := fs.String("domain", "", "production hostname without scheme (enables canonical URLs, sitemap, social cards)")
 	routes := routeFlags{}
 	fs.Var(&routes, "route", "task=model routing override (repeatable)")
 	if err := fs.Parse(args); err != nil {
@@ -171,7 +172,23 @@ func runGenerate(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "repoforge generate: --dir is required")
 		return 2
 	}
-	_, err := generate.RunGenerate(context.Background(), stdin, stdout, stderr, *dir, *siteRel, routes, *briefFile, *productSource, *templateSource, *autoApprove)
+	// The journey executes with its working directory set to the
+	// embedded runtime directory (internal/pyruntime Run), so relative
+	// source paths must be anchored at the caller's working directory
+	// here — otherwise the MCP server resolves them against the runtime
+	// dir and exits, surfacing as "mcp server closed the stream".
+	// Same convention as `mcp serve` above.
+	for _, src := range []*string{productSource, templateSource} {
+		if strings.TrimSpace(*src) != "" && !filepath.IsAbs(*src) {
+			cwd, err := os.Getwd()
+			if err != nil {
+				fmt.Fprintf(stderr, "repoforge generate: cannot determine working directory: %v\n", err)
+				return 2
+			}
+			*src = filepath.Join(cwd, *src)
+		}
+	}
+	_, err := generate.RunGenerate(context.Background(), stdin, stdout, stderr, *dir, *siteRel, routes, *briefFile, *productSource, *templateSource, *autoApprove, *domain)
 	if err != nil {
 		fmt.Fprintf(stderr, "repoforge generate: %v\n", err)
 		return 1
@@ -302,7 +319,7 @@ Usage:
   repoforge issue scaffold --type bug|feature|task|security [--path DIR]
   repoforge issue check --type bug|feature|task|security --file BODY [--path DIR]
   repoforge mcp serve --allowed-dir DIR [--template-source DIR] [--product-source DIR]
-  repoforge generate --dir DIR [--out NAME] [--brief-file F] [--product-source DIR] [--template-source DIR] [--yes] [--route task=model ...]
+  repoforge generate --dir DIR [--out NAME] [--brief-file F] [--product-source DIR] [--template-source DIR] [--yes] [--domain HOST] [--route task=model ...]
   repoforge astro build --out DIR [--product-source DIR] [--var key=value ...] [--force]
   repoforge version
 

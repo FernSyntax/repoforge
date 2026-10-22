@@ -11,7 +11,8 @@ runtime owns the agentic steps.
 | --- | --- |
 | `brief.py` | The intake questions (ICP, audience, tone, keywords, geography, non-goals, success metric). |
 | `state.py` | `RunState` — the resumable contract; digests, never credentials. |
-| `graph.py` | The journey: intake → spec_draft → approve_gate → project_model → generate → content → verify → report. |
+| `graph.py` | The journey: intake → spec_draft → spec_critic → approve_gate → design → project_model → generate → design_apply → content → review → verify → report. |
+| `agents.py` | The review mesh: read-only accessibility, SEO/AEO, security (blocking), performance/privacy, and i18n auditors plus the advisory spec critique. |
 | `llm.py` | Gateway caller: OpenAI-compatible, Bearer key from env, classified failures. |
 | `mcp_client.py` | Drives `repoforge mcp serve` over stdio. |
 | `run.py` | start / resume / status CLI. |
@@ -79,16 +80,61 @@ Task routes default to `auto` (the gateway router). Pin one with
 configuration. If no eligible route answers, the run stops with a
 classified `rate-limit` failure — there is no paid fallback.
 
+## Production layer
+
+One command takes a Stitch prototype to a production site:
+
+```sh
+repoforge generate -dir /run --brief brief.json -yes \
+  --domain example.com
+```
+
+What the journey adds on top of the faithful Stitch page:
+
+| Area | What ships |
+| --- | --- |
+| Themes | Stitch theme is the dark design; a light palette is **derived** from it, every text/surface pair forced to WCAG AA (4.5:1) with automatic correction, plus a persistent dark/light toggle (`localStorage`, honors `prefers-color-scheme`). |
+| SEO | `<title>`, capped meta description, canonical, Open Graph + Twitter cards, `og.svg` social image, `sitemap.xml`, `robots.txt` with the sitemap reference. |
+| AEO/GEO | WebSite + Organization + FAQPage JSON-LD, question headings, `llms.txt` map, landmarks, locale signals. |
+| Security | Hash-pinned Content-Security-Policy in `public/_headers`, HSTS, frame/type/referer/permissions headers, external links hardened with `rel=noopener`, no `javascript:` URLs — link and secret findings **block** verify. |
+| Offline | Tailwind compiled to static CSS, fonts self-hosted: zero remote origins at view time. |
+| Review | A11y, SEO/AEO/GEO, images, performance, i18n, ICP fit, security, links. Advisory findings warn; security and links fail the run. |
+
+`--domain` is required for absolute URLs (canonical, sitemap,
+og:image). Without it the site stays relative — no host is ever
+invented. ICP fit scores brief vocabulary against the shipped copy;
+fabrication flags (money, percentages, metrics) are reported for human
+review, because Stitch body copy invents them.
+
 ## Stitch design input (optional)
 
 When `STITCH_API_KEY` is set, the journey takes a bounded design
 branch after approval: one Stitch project, one desktop screen from
 the brief, plus its tokens and screenshot references, all recorded in
-run state and fed to the content pass as direction. Bounds: one
-project and one screen per run, no automatic deletion of remote
-state, failures skip the branch with a recorded reason instead of
-failing the run. Without a key the branch records `design_skipped`
-and the journey continues on the local template.
+run state and fed to the content pass as direction. A second node
+(`design_apply`, after generation) downloads the screen HTML and
+applies the design — theme tokens into `global.css`, Stitch nav
+structure into the header/footer rewired to real in-page anchors —
+while generated copy stays brief-driven: Stitch text routinely invents
+statistics, certifications, and URLs, so claim-shaped labels are
+dropped with reasons in the report and the review mesh validates the
+result. Faithful mode goes one step further: the generated index page
+IS the sanitized Stitch screen (Tailwind loader + theme config kept
+verbatim via `is:inline`, event handlers and non-Tailwind scripts
+dropped, `<html>` theme class preserved), so the site looks like the
+Stitch design. Body copy in faithful mode is Stitch-generated and the
+report requires human review before publishing; the content pass
+releases its FAQ contract and verify checks structure instead.
+`design_apply` then bakes the theme to static CSS (`tailwindcss@3`
+plus the CDN plugins the document asked for, dev-only, workspace
+cleaned afterwards) and self-hosts the Google Fonts into
+`public/fonts`, so the page renders identically with no CDN or font
+dependence at view time. Any bake step may fail back to the faithful
+CDN page with a recorded reason. Bounds: one project and one screen per run, reference HTML
+capped at 2MiB, no automatic deletion of remote state, failures skip
+the branch with a recorded reason instead of failing the run. Without
+a key the branch records `design_skipped` and the journey continues on
+the local template.
 
 ```sh
 export STITCH_API_KEY="<rotated-key>"   # env only; never commit, never paste
