@@ -595,6 +595,7 @@ def test_faithful_run_skips_content_llm(tmp_path):
     import test_graph as tg
     from graph import Deps, build_graph
     from langgraph.checkpoint.sqlite import SqliteSaver
+    import agents as agents_mod
     llm = tg.StubLLM({
         "spec-drafting": ["# Spec\n\nDemo."],
         "architecture-review": ["No blocking issues."],
